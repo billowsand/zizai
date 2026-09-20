@@ -26,12 +26,20 @@ impl eframe::App for Settings {
         egui::CentralPanel::default()
             .frame(crate::theme::page_frame(ctx))
             .show(ctx, |ui| match self.page() {
+                "voice" => pages::voice::view(self, ui),
                 "appearance" => pages::appearance::view(self, ui),
                 "dictionaries" => pages::dictionaries::view(self, ui),
                 "advanced" => pages::advanced::view(self, ui),
                 "about" => pages::about::view(self, ui),
                 _ => pages::general::view(self, ui),
             });
+
+        self.flush_voice_polish_edits(false);
+        if self.voice_polish_url_edit != self.config.voice.polish_url
+            || self.voice_polish_model_edit != self.config.voice.polish_model
+        {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
 
         self.report_first_frame(frame);
     }
@@ -44,6 +52,7 @@ impl Settings {
     }
 
     pub(crate) fn select_page(&mut self, tag: &str) {
+        self.flush_voice_polish_edits(true);
         self.page = tag.to_owned();
     }
 

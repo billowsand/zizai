@@ -17,6 +17,10 @@ pub struct WorkerConfig {
     /// 检测到有效语音后，连续静音多久自动结束；0 表示关闭。
     pub auto_stop_ms: u64,
 
+    pub polish_url: Option<String>,
+
+    pub polish_model: Option<String>,
+
     pub hr_lexicon: Option<String>,
 
     pub hr_rule_fsts: Option<String>,

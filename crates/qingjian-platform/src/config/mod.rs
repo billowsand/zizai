@@ -154,6 +154,10 @@ language = "auto"
 input_device = ""
 # 检测到说话后，连续静音多少毫秒自动开始识别；0 表示仍需再按一次快捷键
 auto_stop_ms = 0
+# SenseVoice 已原生输出标点；可选再用 OpenAI 兼容大模型服务修正少量错字与断句
+polish_enabled = false
+polish_url = "http://localhost:1234"
+polish_model = "local-model"
 # 可选 sherpa-onnx 同音词替换资源；留空关闭
 hr_lexicon = ""
 hr_rule_fsts = ""

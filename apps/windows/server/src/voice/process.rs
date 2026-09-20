@@ -49,6 +49,8 @@ impl ProcessVoiceBackend {
                 input_device: (!config.input_device.trim().is_empty())
                     .then(|| config.input_device.clone()),
                 auto_stop_ms: config.auto_stop_ms,
+                polish_url: config.polish_enabled.then(|| config.polish_url.clone()),
+                polish_model: config.polish_enabled.then(|| config.polish_model.clone()),
                 hr_lexicon: optional(&config.hr_lexicon),
                 hr_rule_fsts: optional(&config.hr_rule_fsts),
             },

@@ -5,3 +5,4 @@ pub(crate) mod advanced;
 pub(crate) mod appearance;
 pub(crate) mod dictionaries;
 pub(crate) mod general;
+pub(crate) mod voice;

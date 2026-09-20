@@ -1,8 +1,8 @@
-//! 「通用」页：输入方案、按键、标点、候选质量与语音输入。
+//! 「通用」页：输入方案、按键、标点与候选质量。
 //! 分节在左侧导航里，这里不再套「输入方案 / 按键 / 标点」的小节标题。
 
 use eframe::egui;
-use qingjian_platform::{Modifiers, VoiceTrigger};
+use qingjian_platform::Modifiers;
 
 use crate::app::Settings;
 use crate::widgets::{CONTROL_WIDTH, LABEL_SIZE, list, page, toggle};
@@ -34,15 +34,6 @@ const MODIFIERS: [(&str, &str); 6] = [
     ("Ctrl + Shift", "shift+ctrl"),
     ("Ctrl + Alt", "ctrl+alt"),
     ("Alt + Shift", "shift+alt"),
-];
-
-/// 按一下开始、再按一下结束的单键预设。
-const VOICE_KEYS: [(&str, &str); 5] = [
-    ("右 Alt", "right_alt"),
-    ("右 Ctrl", "right_ctrl"),
-    ("Caps Lock", "caps_lock"),
-    ("Scroll Lock", "scroll_lock"),
-    ("关闭快捷键", "off"),
 ];
 
 pub(crate) fn view(settings: &mut Settings, ui: &mut egui::Ui) {
@@ -143,77 +134,6 @@ pub(crate) fn view(settings: &mut Settings, ui: &mut egui::Ui) {
                     response
                 },
             );
-            let mut voice = settings.config.voice.enabled;
-            list.row(
-                "\u{E720}",
-                "本地语音输入",
-                "按一下快捷键开始说话，再按一下后离线识别并直接写入当前输入框。首次使用需按文档放置 SenseVoice 模型。",
-                |ui| {
-                    let response = toggle(ui, &mut voice, "本地语音输入");
-                    if response.changed() {
-                        settings.save("voice", "enabled", voice);
-                    }
-                    response
-                },
-            );
-            let current_voice_key = settings.config.shortcut.voice;
-            list.row(
-                "\u{E765}",
-                "语音快捷键",
-                "按一下开始录音，再按一下开始识别；密码框中不会拦截。",
-                |ui| {
-                    ui.add_enabled_ui(voice, |ui| {
-                        let selected = match current_voice_key {
-                            VoiceTrigger::RightAlt => 0,
-                            VoiceTrigger::RightCtrl => 1,
-                            VoiceTrigger::CapsLock => 2,
-                            VoiceTrigger::ScrollLock => 3,
-                            VoiceTrigger::Off => 4,
-                        };
-                        let (response, picked) = show_combo(ui, "voice-key", &VOICE_KEYS, selected);
-                        if let Some(value) = picked {
-                            settings.save("shortcut", "voice", value);
-                        }
-                        response
-                    })
-                    .inner
-                },
-            );
-            let current_voice_device = settings.config.voice.input_device.clone();
-            let voice_devices = settings.voice_devices.clone();
-            let default_voice_device = settings.default_voice_device.clone();
-            let device_tip = default_voice_device.as_deref().map_or_else(
-                || "选择语音输入使用的麦克风；“系统默认”会跟随 Windows。".to_owned(),
-                |name| format!("选择语音输入使用的麦克风；当前 Windows 默认设备：{name}。"),
-            );
-            list.row("\u{E720}", "语音麦克风", &device_tip, |ui| {
-                ui.add_enabled_ui(voice, |ui| {
-                    let (response, picked) =
-                        voice_device_combo(ui, &current_voice_device, &voice_devices);
-                    if let Some(value) = picked {
-                        settings.save("voice", "input_device", value);
-                    }
-                    response
-                })
-                .inner
-            });
-            let mut auto_finish = settings.config.voice.auto_stop_ms > 0;
-            list.row(
-                "\u{E8FB}",
-                "停顿后自动完成",
-                "检测到你已经说话后，连续安静约 1.2 秒便自动开始识别；仍可再按一次快捷键立即完成。",
-                |ui| {
-                    ui.add_enabled_ui(voice, |ui| {
-                        let response = toggle(ui, &mut auto_finish, "停顿后自动完成");
-                        if response.changed() {
-                            let milliseconds = if auto_finish { 1_200_i64 } else { 0_i64 };
-                            settings.save("voice", "auto_stop_ms", milliseconds);
-                        }
-                        response
-                    })
-                    .inner
-                },
-            );
             let mut chinese_first = settings.config.general.chinese_first;
             list.row(
                 "\u{E71C}",
@@ -279,49 +199,6 @@ fn show_combo(
                 if ui.selectable_label(index == selected, *label).clicked() && index != selected {
                     picked = Some(*value);
                 }
-            }
-        })
-        .response;
-    (response, picked)
-}
-
-/// 输入设备来自系统，不能用上面的静态预设下拉；空字符串表示跟随 Windows 默认设备。
-fn voice_device_combo(
-    ui: &mut egui::Ui,
-    current: &str,
-    devices: &[String],
-) -> (egui::Response, Option<String>) {
-    let mut picked = None;
-    let selected = if current.trim().is_empty() {
-        "系统默认"
-    } else {
-        current
-    };
-    let response = egui::ComboBox::from_id_salt("voice-device")
-        .width(CONTROL_WIDTH)
-        .selected_text(egui::RichText::new(selected).size(LABEL_SIZE))
-        .show_ui(ui, |ui| {
-            if ui
-                .selectable_label(current.trim().is_empty(), "系统默认")
-                .clicked()
-                && !current.trim().is_empty()
-            {
-                picked = Some(String::new());
-            }
-            if !devices.is_empty() {
-                ui.separator();
-            }
-            for device in devices {
-                if ui.selectable_label(current == device, device).clicked() && current != device {
-                    picked = Some(device.clone());
-                }
-            }
-            if devices.is_empty() {
-                ui.add_enabled(false, egui::Label::new("未发现输入设备"));
-            } else if !current.trim().is_empty() && !devices.iter().any(|device| device == current)
-            {
-                ui.separator();
-                ui.add_enabled(false, egui::Label::new(format!("当前不可用：{current}")));
             }
         })
         .response;

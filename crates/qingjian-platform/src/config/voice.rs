@@ -24,6 +24,15 @@ pub struct VoiceConfig {
     /// 检测到说话后，连续静音多久自动结束录音；0 表示关闭。
     pub auto_stop_ms: u64,
 
+    /// 是否用 OpenAI 兼容的大模型服务整理最终转写。
+    pub polish_enabled: bool,
+
+    /// OpenAI 兼容服务根地址，例如 LM Studio。
+    pub polish_url: String,
+
+    /// 服务中的模型名称。
+    pub polish_model: String,
+
     /// sherpa-onnx 同音词词典路径；空为关闭。
     pub hr_lexicon: String,
 
@@ -40,6 +49,9 @@ impl Default for VoiceConfig {
             language: "auto".into(),
             input_device: String::new(),
             auto_stop_ms: 0,
+            polish_enabled: false,
+            polish_url: "http://localhost:1234".into(),
+            polish_model: "local-model".into(),
             hr_lexicon: String::new(),
             hr_rule_fsts: String::new(),
         }

@@ -11,8 +11,9 @@ use qingjian_platform::{ColorScheme, Config};
 use crate::{fonts, theme};
 
 /// 左侧导航的分节：tag + 界面名 + 图标码点。
-pub(crate) const PAGES: [(&str, &str, &str); 5] = [
+pub(crate) const PAGES: [(&str, &str, &str); 6] = [
     ("general", "通用", "\u{E713}"),
+    ("voice", "语音输入", "\u{E720}"),
     ("appearance", "候选窗口", "\u{E890}"),
     ("dictionaries", "词库", "\u{E8F1}"),
     ("advanced", "高级", "\u{E90F}"),
@@ -38,6 +39,15 @@ pub(crate) struct Settings {
     /// 当前 Windows 默认输入设备名，只用于设置页说明。
     pub(crate) default_voice_device: Option<String>,
 
+    /// 大模型服务地址的编辑缓冲；停键或失去焦点时落盘。
+    pub(crate) voice_polish_url_edit: String,
+
+    /// 大模型名称的编辑缓冲。
+    pub(crate) voice_polish_model_edit: String,
+
+    /// 服务地址或模型名称最后一次编辑时间，用来合并连续输入的落盘。
+    voice_polish_dirty_since: Option<Instant>,
+
     /// 上次解析出的系统明暗，变了换一套 Visuals。
     pub(crate) dark: bool,
 
@@ -59,6 +69,8 @@ impl Settings {
         fonts::install(&cc.egui_ctx, &config.general.font);
         theme::install(&cc.egui_ctx, applied_scheme);
         let voice_devices = crate::voice_devices::scan();
+        let voice_polish_url_edit = config.voice.polish_url.clone();
+        let voice_polish_model_edit = config.voice.polish_model.clone();
         Self {
             config,
             path,
@@ -66,6 +78,9 @@ impl Settings {
             families: qingjian_render::system_fonts::families(),
             voice_devices: voice_devices.available,
             default_voice_device: voice_devices.default,
+            voice_polish_url_edit,
+            voice_polish_model_edit,
+            voice_polish_dirty_since: None,
             dark: theme::system_prefers_dark(),
             applied_scheme,
             started,
@@ -110,5 +125,35 @@ impl Settings {
         if let Ok(config) = Config::load(&self.path) {
             self.config = config;
         }
+    }
+
+    /// 记下大模型连接配置正在编辑；停键后合并写回，避免每个字符都重启语音 Worker。
+    pub(crate) fn voice_polish_edited(&mut self) {
+        self.voice_polish_dirty_since = Some(Instant::now());
+    }
+
+    /// 写回大模型连接配置；`force` 用于失焦或离开页面时立即保存。
+    pub(crate) fn flush_voice_polish_edits(&mut self, force: bool) {
+        let Some(since) = self.voice_polish_dirty_since else {
+            return;
+        };
+        if !force && since.elapsed() < std::time::Duration::from_millis(500) {
+            return;
+        }
+        let values = [
+            ("polish_url", self.voice_polish_url_edit.trim().to_owned()),
+            (
+                "polish_model",
+                self.voice_polish_model_edit.trim().to_owned(),
+            ),
+        ];
+        for (key, value) in values {
+            if let Err(error) = Config::set_value(&self.path, "voice", key, value) {
+                eprintln!("保存 [voice] {key} 失败: {error}");
+                return;
+            }
+        }
+        self.voice_polish_dirty_since = None;
+        self.reload();
     }
 }

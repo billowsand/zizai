@@ -14,7 +14,9 @@ tracing.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 cpal = "0.15"
+reqwest = { workspace = true, features = ["blocking", "json"] }
 rubato = "0.15"
+serde_json.workspace = true
 sherpa-onnx = { version = "1", default-features = false }
 
 [lints]

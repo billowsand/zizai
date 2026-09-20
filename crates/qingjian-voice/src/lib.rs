@@ -15,6 +15,8 @@ mod snapshot;
 mod asr;
 #[cfg(windows)]
 mod audio;
+#[cfg(windows)]
+mod polish;
 
 pub use config::WorkerConfig;
 pub use controller::Controller;

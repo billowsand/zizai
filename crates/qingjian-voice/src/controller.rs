@@ -91,6 +91,7 @@ fn run_windows(
     use crate::audio::{
         LivePreview, OpenedInput, SilenceDetector, open_input, rms_energy, visual_level,
     };
+    use crate::polish::TextPolisher;
 
     let asr = AsrConfig {
         model: config.model,
@@ -118,6 +119,11 @@ fn run_windows(
         }
     };
     tracing::info!("语音模型已加载");
+    let polisher = config
+        .polish_url
+        .as_deref()
+        .zip(config.polish_model.as_deref())
+        .and_then(|(url, model)| TextPolisher::new(url, model));
     replace_snapshot(
         snapshot,
         WorkerSnapshot {
@@ -168,6 +174,7 @@ fn run_windows(
                     &audio_receiver,
                     &mut samples,
                     &engine,
+                    polisher.as_ref(),
                     snapshot,
                 );
                 started = None;
@@ -233,6 +240,7 @@ fn run_windows(
                     &audio_receiver,
                     &mut samples,
                     &engine,
+                    polisher.as_ref(),
                     snapshot,
                 );
                 started = None;
@@ -266,6 +274,7 @@ fn finish(
     receiver: &mpsc::Receiver<Vec<f32>>,
     samples: &mut Vec<f32>,
     engine: &crate::asr::AsrEngine,
+    polisher: Option<&crate::polish::TextPolisher>,
     snapshot: &Arc<Mutex<WorkerSnapshot>>,
 ) {
     use qingjian_platform::protocol::VoiceState;
@@ -294,6 +303,9 @@ fn finish(
     samples.clear();
     match result {
         Ok(text) if crate::audio::is_meaningful(&text) => {
+            let text = polisher
+                .and_then(|value| value.polish(&text))
+                .unwrap_or(text);
             tracing::info!(request, chars = text.chars().count(), "语音识别完成");
             replace_snapshot(
                 snapshot,
