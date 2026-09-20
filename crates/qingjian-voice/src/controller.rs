@@ -88,7 +88,9 @@ fn run_windows(
     use std::time::{Duration, Instant};
 
     use crate::asr::{AsrConfig, AsrEngine, HrConfig};
-    use crate::audio::{LivePreview, OpenedInput, open_input, rms_energy, visual_level};
+    use crate::audio::{
+        LivePreview, OpenedInput, SilenceDetector, open_input, rms_energy, visual_level,
+    };
 
     let asr = AsrConfig {
         model: config.model,
@@ -129,20 +131,36 @@ fn run_windows(
     let mut preview: Option<LivePreview> = None;
     let mut samples = Vec::new();
     let mut started = None::<Instant>;
+    let mut silence = SilenceDetector::new(config.auto_stop_ms);
 
     loop {
         if opened.is_some() {
+            let mut should_auto_finish = false;
             while let Ok(chunk) = audio_receiver.try_recv() {
                 if let Some(preview) = preview.as_ref() {
                     preview.push(&chunk);
                 }
                 if let Some(input) = opened.as_ref() {
-                    update_level(snapshot, visual_level(rms_energy(&chunk, input.channels)));
+                    let level = visual_level(rms_energy(&chunk, input.channels));
+                    update_level(snapshot, level);
+                    let frames = chunk.len() / usize::from(input.channels.max(1));
+                    let chunk_duration = Duration::from_secs_f64(
+                        frames as f64 / f64::from(input.sample_rate.max(1)),
+                    );
+                    should_auto_finish |= silence.observe(level, chunk_duration);
                 }
                 samples.extend_from_slice(&chunk);
+                if should_auto_finish {
+                    break;
+                }
             }
-            if started.is_some_and(|value| value.elapsed() >= Duration::from_secs(90)) {
+            let reached_limit =
+                started.is_some_and(|value| value.elapsed() >= Duration::from_secs(90));
+            if should_auto_finish || reached_limit {
                 let request = current_request(snapshot).unwrap_or_default();
+                if should_auto_finish {
+                    tracing::info!(request, "检测到停顿，自动结束语音录音");
+                }
                 preview = None;
                 finish(
                     request,
@@ -153,6 +171,7 @@ fn run_windows(
                     snapshot,
                 );
                 started = None;
+                silence.reset();
             }
         }
 
@@ -168,6 +187,7 @@ fn run_windows(
                 }
                 while audio_receiver.try_recv().is_ok() {}
                 samples.clear();
+                silence.reset();
                 match open_input(config.input_device.as_deref(), audio_sender.clone()) {
                     Ok(input) => {
                         tracing::info!(device = %input.name, request, "麦克风已打开");
@@ -216,11 +236,13 @@ fn run_windows(
                     snapshot,
                 );
                 started = None;
+                silence.reset();
             }
             Command::Cancel(request) if current_request(snapshot) == Some(request) => {
                 preview = None;
                 opened = None;
                 started = None;
+                silence.reset();
                 samples.clear();
                 while audio_receiver.try_recv().is_ok() {}
                 replace_snapshot(

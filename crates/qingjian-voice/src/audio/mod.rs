@@ -3,6 +3,7 @@
 mod opened;
 mod preview;
 mod resample;
+mod silence;
 
 use std::sync::mpsc;
 
@@ -13,6 +14,7 @@ use crate::VoiceError;
 pub(crate) use opened::OpenedInput;
 pub(crate) use preview::LivePreview;
 pub(crate) use resample::to_mono_16k;
+pub(crate) use silence::SilenceDetector;
 
 pub(crate) fn open_input(
     preferred: Option<&str>,

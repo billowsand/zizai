@@ -179,6 +179,23 @@ pub(crate) fn view(settings: &mut Settings, ui: &mut egui::Ui) {
                     .inner
                 },
             );
+            let mut auto_finish = settings.config.voice.auto_stop_ms > 0;
+            list.row(
+                "\u{E8FB}",
+                "停顿后自动完成",
+                "检测到你已经说话后，连续安静约 1.2 秒便自动开始识别；仍可再按一次快捷键立即完成。",
+                |ui| {
+                    ui.add_enabled_ui(voice, |ui| {
+                        let response = toggle(ui, &mut auto_finish, "停顿后自动完成");
+                        if response.changed() {
+                            let milliseconds = if auto_finish { 1_200_i64 } else { 0_i64 };
+                            settings.save("voice", "auto_stop_ms", milliseconds);
+                        }
+                        response
+                    })
+                    .inner
+                },
+            );
             let mut chinese_first = settings.config.general.chinese_first;
             list.row(
                 "\u{E71C}",
