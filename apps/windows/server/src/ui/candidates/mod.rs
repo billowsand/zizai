@@ -7,6 +7,7 @@ mod render_data;
 pub(crate) mod row;
 
 use std::cell::{Cell, RefCell};
+use std::time::Instant;
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow};
@@ -19,7 +20,7 @@ use windows::core::{PCWSTR, Result, w};
 
 use qingjian_platform::ColorScheme;
 use qingjian_platform::protocol::{Frame, VoiceState};
-use qingjian_render::VoiceFrame;
+use qingjian_render::{VoiceFrame, VoiceTone};
 
 use self::placement::{LastPlacement, place};
 pub(crate) use self::render_data::RenderData;
@@ -30,6 +31,11 @@ use crate::dispatch::VoiceView;
 
 const CLASS_NAME: PCWSTR = w!("QingjianCandidateWindow");
 static CLASS: WindowClass = WindowClass::new();
+
+/// 视觉电平已扣过底噪；略高于零才算真正收到声音，避免环境噪声误判。
+const HEARD_SOUND_LEVEL: u16 = 24;
+
+const QUIET_HINT_AFTER_SECS: u64 = 2;
 
 /// `HKCU\...\Themes\Personalize\AppsUseLightTheme` 为 0 是深色；读不到当浅色。
 pub(super) fn system_prefers_dark() -> bool {
@@ -111,6 +117,7 @@ impl CandidateWindow {
 
     /// 保留最近一小段电平历史，形成从左向右滚动的波形。
     pub(crate) fn set_voice(&self, view: VoiceView) {
+        let now = Instant::now();
         let mut voice = self.voice.borrow_mut();
         let reset = voice
             .as_ref()
@@ -133,20 +140,60 @@ impl CandidateWindow {
         if levels.len() > 24 {
             levels.drain(..levels.len() - 24);
         }
-        let (title, hint) = match view.state {
-            VoiceState::Recording => ("正在听", "再次按快捷键完成 · Esc 取消"),
-            VoiceState::Recognizing => ("正在识别", "正在整理转写…"),
-            VoiceState::Ready => ("即将上屏", "识别完成"),
-            VoiceState::Failed => ("语音暂不可用", "可再次按快捷键重试"),
-            VoiceState::Idle => ("没有听清", "请靠近麦克风再试一次"),
-            _ => ("语音输入", "请稍候"),
+        let previous = voice.as_ref();
+        let started_at = if view.state == VoiceState::Recording {
+            if reset {
+                Some(now)
+            } else {
+                previous.and_then(|value| value.started_at).or(Some(now))
+            }
+        } else {
+            None
+        };
+        let elapsed_seconds = if let Some(started_at) = started_at {
+            now.saturating_duration_since(started_at).as_secs()
+        } else {
+            previous.map_or(0, |value| value.elapsed_seconds)
+        };
+        let heard_sound = if reset {
+            view.level >= HEARD_SOUND_LEVEL
+        } else {
+            previous.is_some_and(|value| value.heard_sound) || view.level >= HEARD_SOUND_LEVEL
+        };
+        let (title, hint, tone, show_elapsed) = match view.state {
+            VoiceState::Recording => (
+                "正在听",
+                recording_hint(heard_sound, elapsed_seconds),
+                VoiceTone::Listening,
+                true,
+            ),
+            VoiceState::Recognizing => ("正在识别", "正在整理转写…", VoiceTone::Working, true),
+            VoiceState::Ready => ("即将上屏", "识别完成", VoiceTone::Success, true),
+            VoiceState::Failed => (
+                "语音暂不可用",
+                "可再次按快捷键重试",
+                VoiceTone::Warning,
+                false,
+            ),
+            VoiceState::Idle => (
+                "没有听清",
+                "请靠近麦克风再试一次",
+                VoiceTone::Warning,
+                false,
+            ),
+            _ => ("语音输入", "请稍候", VoiceTone::Working, false),
         };
         *voice = Some(VoiceRenderData {
             state: view.state,
             color_scheme: view.color_scheme,
+            started_at,
+            elapsed_seconds,
+            heard_sound,
             frame: VoiceFrame {
                 levels,
                 title: title.to_owned(),
+                tone,
+                elapsed: show_elapsed.then(|| format_elapsed(elapsed_seconds)),
                 transcript: view.text,
                 hint: hint.to_owned(),
             },
@@ -222,7 +269,29 @@ struct VoiceRenderData {
 
     color_scheme: ColorScheme,
 
+    started_at: Option<Instant>,
+
+    elapsed_seconds: u64,
+
+    heard_sound: bool,
+
     frame: VoiceFrame,
+}
+
+fn format_elapsed(seconds: u64) -> String {
+    let minutes = seconds / 60;
+    let seconds = seconds % 60;
+    format!("{minutes:02}:{seconds:02}")
+}
+
+fn recording_hint(heard_sound: bool, elapsed_seconds: u64) -> &'static str {
+    if !heard_sound && elapsed_seconds >= QUIET_HINT_AFTER_SECS {
+        "声音较小 · 请靠近麦克风"
+    } else if heard_sound {
+        "再次按快捷键完成 · Esc 取消"
+    } else {
+        "请开始说话 · 再次按快捷键完成"
+    }
 }
 
 impl Drop for CandidateWindow {
@@ -234,4 +303,23 @@ impl Drop for CandidateWindow {
 /// 分层窗口无需 `WM_PAINT`，全交默认处理。
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{format_elapsed, recording_hint};
+
+    #[test]
+    fn elapsed_time_is_stable_and_easy_to_scan() {
+        assert_eq!(format_elapsed(0), "00:00");
+        assert_eq!(format_elapsed(8), "00:08");
+        assert_eq!(format_elapsed(754), "12:34");
+    }
+
+    #[test]
+    fn quiet_hint_waits_before_warning_and_recovers_after_sound() {
+        assert_eq!(recording_hint(false, 0), "请开始说话 · 再次按快捷键完成");
+        assert_eq!(recording_hint(false, 2), "声音较小 · 请靠近麦克风");
+        assert_eq!(recording_hint(true, 5), "再次按快捷键完成 · Esc 取消");
+    }
 }

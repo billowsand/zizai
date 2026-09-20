@@ -4,7 +4,7 @@ use crate::canvas::Canvas;
 use crate::error::RenderError;
 use crate::shadow::Shadow;
 use crate::text::TextStyle;
-use crate::{Rendered, Theme, VoiceFrame};
+use crate::{Rendered, Theme, VoiceFrame, VoiceTone};
 
 use super::{Metrics, Renderer};
 
@@ -15,6 +15,8 @@ const BAR_WIDTH: f32 = 3.0;
 const BAR_GAP: f32 = 3.0;
 const ROW_GAP: f32 = 5.0;
 const TITLE_GAP: f32 = 12.0;
+const STATUS_SIZE: f32 = 6.0;
+const STATUS_GAP: f32 = 7.0;
 
 impl Renderer {
     /// 画语音态；尺寸与候选窗一样以点为单位并共用阴影、圆角、字体和配色。
@@ -59,9 +61,27 @@ impl Renderer {
         draw_waveform(&mut canvas, frame, &metrics, left, top, top_height);
 
         let title_style = metrics.text_style();
-        let title_x = left + metrics.px(WAVE_WIDTH + TITLE_GAP);
+        let status_x = left + metrics.px(WAVE_WIDTH + TITLE_GAP);
+        let status_size = metrics.px(STATUS_SIZE);
+        canvas.fill_round_rect(
+            status_x,
+            top + (top_height - status_size) / 2.0,
+            status_size,
+            status_size,
+            status_size / 2.0,
+            tone_color(frame.tone, theme),
+        );
+        let title_x = status_x + status_size + metrics.px(STATUS_GAP);
         let title_y = top + (top_height - title_style.line_height) / 2.0;
         self.draw_text(&mut canvas, &frame.title, &title_style, title_x, title_y);
+
+        if let Some(elapsed) = &frame.elapsed {
+            let elapsed_style = metrics.style(theme.annotation_font, theme.colors.gloss);
+            let elapsed_width = self.measure(elapsed, &elapsed_style).width;
+            let elapsed_x = margin + content_width - metrics.padding() - elapsed_width;
+            let elapsed_y = top + (top_height - elapsed_style.line_height) / 2.0;
+            self.draw_text(&mut canvas, elapsed, &elapsed_style, elapsed_x, elapsed_y);
+        }
 
         let body = frame.transcript.as_deref().unwrap_or(&frame.hint);
         let body_color = if frame.transcript.is_some() {
@@ -125,7 +145,7 @@ fn draw_waveform(
         let color = if level == 0 {
             theme_alpha(metrics.theme.colors.pos, 110)
         } else {
-            metrics.theme.colors.accent
+            tone_color(frame.tone, metrics.theme)
         };
         canvas.fill_round_rect(
             x,
@@ -135,6 +155,15 @@ fn draw_waveform(
             metrics.px(BAR_WIDTH / 2.0),
             color,
         );
+    }
+}
+
+fn tone_color(tone: VoiceTone, theme: &Theme) -> crate::Color {
+    match tone {
+        VoiceTone::Listening => theme.colors.accent,
+        VoiceTone::Working => theme.colors.cloud,
+        VoiceTone::Success => theme.colors.caret,
+        VoiceTone::Warning => theme.colors.correction,
     }
 }
 
