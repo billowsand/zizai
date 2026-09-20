@@ -40,6 +40,8 @@ jiff.workspace = true
 rfd = "0.17"
 # 读 AppsUseLightTheme 跟随系统明暗（Server 判断候选窗深浅用的也是它）
 windows-registry.workspace = true
+# 在语音设置里列出 WASAPI 输入设备；识别 Worker 仍独占实际采音。
+cpal = "0.15"
 # 解 Logo 的 PNG（渲染器也用它），省得为一张图引 egui_extras 的图片加载器
 png.workspace = true
 

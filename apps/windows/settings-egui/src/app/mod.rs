@@ -32,6 +32,12 @@ pub(crate) struct Settings {
     /// 系统里的字族名（DirectWrite 列举），「字体」下拉用；开窗时列一次。
     pub(crate) families: Vec<String>,
 
+    /// 打开设置时列出的输入设备；实际采音仍由独立语音 Worker 完成。
+    pub(crate) voice_devices: Vec<String>,
+
+    /// 当前 Windows 默认输入设备名，只用于设置页说明。
+    pub(crate) default_voice_device: Option<String>,
+
     /// 上次解析出的系统明暗，变了换一套 Visuals。
     pub(crate) dark: bool,
 
@@ -52,11 +58,14 @@ impl Settings {
         let applied_scheme = config.general.theme;
         fonts::install(&cc.egui_ctx, &config.general.font);
         theme::install(&cc.egui_ctx, applied_scheme);
+        let voice_devices = crate::voice_devices::scan();
         Self {
             config,
             path,
             page: "general".to_owned(),
             families: qingjian_render::system_fonts::families(),
+            voice_devices: voice_devices.available,
+            default_voice_device: voice_devices.default,
             dark: theme::system_prefers_dark(),
             applied_scheme,
             started,

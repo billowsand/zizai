@@ -179,6 +179,24 @@ pub(crate) fn view(settings: &mut Settings, ui: &mut egui::Ui) {
                     .inner
                 },
             );
+            let current_voice_device = settings.config.voice.input_device.clone();
+            let voice_devices = settings.voice_devices.clone();
+            let default_voice_device = settings.default_voice_device.clone();
+            let device_tip = default_voice_device.as_deref().map_or_else(
+                || "选择语音输入使用的麦克风；“系统默认”会跟随 Windows。".to_owned(),
+                |name| format!("选择语音输入使用的麦克风；当前 Windows 默认设备：{name}。"),
+            );
+            list.row("\u{E720}", "语音麦克风", &device_tip, |ui| {
+                ui.add_enabled_ui(voice, |ui| {
+                    let (response, picked) =
+                        voice_device_combo(ui, &current_voice_device, &voice_devices);
+                    if let Some(value) = picked {
+                        settings.save("voice", "input_device", value);
+                    }
+                    response
+                })
+                .inner
+            });
             let mut auto_finish = settings.config.voice.auto_stop_ms > 0;
             list.row(
                 "\u{E8FB}",
@@ -261,6 +279,49 @@ fn show_combo(
                 if ui.selectable_label(index == selected, *label).clicked() && index != selected {
                     picked = Some(*value);
                 }
+            }
+        })
+        .response;
+    (response, picked)
+}
+
+/// 输入设备来自系统，不能用上面的静态预设下拉；空字符串表示跟随 Windows 默认设备。
+fn voice_device_combo(
+    ui: &mut egui::Ui,
+    current: &str,
+    devices: &[String],
+) -> (egui::Response, Option<String>) {
+    let mut picked = None;
+    let selected = if current.trim().is_empty() {
+        "系统默认"
+    } else {
+        current
+    };
+    let response = egui::ComboBox::from_id_salt("voice-device")
+        .width(CONTROL_WIDTH)
+        .selected_text(egui::RichText::new(selected).size(LABEL_SIZE))
+        .show_ui(ui, |ui| {
+            if ui
+                .selectable_label(current.trim().is_empty(), "系统默认")
+                .clicked()
+                && !current.trim().is_empty()
+            {
+                picked = Some(String::new());
+            }
+            if !devices.is_empty() {
+                ui.separator();
+            }
+            for device in devices {
+                if ui.selectable_label(current == device, device).clicked() && current != device {
+                    picked = Some(device.clone());
+                }
+            }
+            if devices.is_empty() {
+                ui.add_enabled(false, egui::Label::new("未发现输入设备"));
+            } else if !current.trim().is_empty() && !devices.iter().any(|device| device == current)
+            {
+                ui.separator();
+                ui.add_enabled(false, egui::Label::new(format!("当前不可用：{current}")));
             }
         })
         .response;

@@ -21,15 +21,18 @@ pub(crate) fn open_input(
     sender: mpsc::SyncSender<Vec<f32>>,
 ) -> Result<OpenedInput, VoiceError> {
     let host = cpal::default_host();
-    let device = preferred
-        .filter(|name| !name.trim().is_empty())
-        .and_then(|preferred| {
-            host.input_devices()
-                .ok()?
-                .find(|device| device.name().is_ok_and(|candidate| candidate == preferred))
-        })
-        .or_else(|| host.default_input_device())
-        .ok_or_else(|| VoiceError::Audio("no input device found".into()))?;
+    let preferred = preferred.filter(|name| !name.trim().is_empty());
+    let device = if let Some(preferred) = preferred {
+        host.input_devices()
+            .map_err(|error| VoiceError::Audio(error.to_string()))?
+            .find(|device| device.name().is_ok_and(|candidate| candidate == preferred))
+            .ok_or_else(|| {
+                VoiceError::Audio(format!("configured input device not found: {preferred}"))
+            })?
+    } else {
+        host.default_input_device()
+            .ok_or_else(|| VoiceError::Audio("no input device found".into()))?
+    };
     let name = device.name().unwrap_or_else(|_| "<unknown>".into());
     let supported = device
         .default_input_config()

@@ -21,6 +21,8 @@ mod theme;
 #[cfg(windows)]
 mod title_bar;
 #[cfg(windows)]
+mod voice_devices;
+#[cfg(windows)]
 mod widgets;
 
 /// 窗口初始大小：导航 168 + 正文一列，够放「标签 + 184 宽的控件」，不铺满半个屏幕。

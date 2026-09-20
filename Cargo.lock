@@ -4228,6 +4228,7 @@ dependencies = [
 name = "qingjian-windows-settings-egui"
 version = "0.1.9-dev"
 dependencies = [
+ "cpal",
  "eframe",
  "jiff",
  "png",
