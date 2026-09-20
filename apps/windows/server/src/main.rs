@@ -171,6 +171,7 @@ fn main() {
     engine.log_session(env!("CARGO_PKG_VERSION"), "windows");
     let router_config = RouterConfig::from(&config);
     let mut router = Router::new(engine, router_config.clone());
+    configure_voice(&mut router, &config, &root);
     // Router 留一份给热加载用，同时接到 Engine 上
     router.set_fuma_table(fuma_table);
     let model_path = dispatch::find_model(user_dir().as_deref(), &root);
@@ -192,6 +193,40 @@ fn main() {
     );
 
     serve(router);
+}
+
+/// 语音功能缺省关闭；打开时 Worker 与 Server 同目录，模型路径相对随包根。
+fn configure_voice(router: &mut Router, config: &Config, root: &Path) {
+    if !config.voice.enabled {
+        return;
+    }
+    let trigger = config.shortcut.voice;
+    if trigger.virtual_key().is_none() {
+        tracing::warn!("语音已启用，但 [shortcut] voice = off");
+        return;
+    }
+    let worker = std::env::current_exe().ok().and_then(|path| {
+        path.parent()
+            .map(|parent| parent.join("qingjian-voice-worker.exe"))
+    });
+    let Some(worker) = worker else {
+        router.configure_voice_failure(trigger, "找不到语音工作进程".into());
+        return;
+    };
+    match qingjian_windows_server::ProcessVoiceBackend::spawn_configured(
+        &worker,
+        root,
+        &config.voice,
+    ) {
+        Ok(backend) => {
+            router.configure_voice(trigger, Box::new(backend));
+            tracing::info!(?trigger, worker = %worker.display(), "语音输入已启用");
+        }
+        Err(error) => {
+            tracing::error!(%error, worker = %worker.display(), "语音 Worker 启动失败");
+            router.configure_voice_failure(trigger, "语音工作进程启动失败".into());
+        }
+    }
 }
 
 /// 日志目录 `%LOCALAPPDATA%\Qingjian\logs` 给 AppContainer 应用（任务栏搜索 / 设置）写权限：

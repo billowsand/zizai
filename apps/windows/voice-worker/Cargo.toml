@@ -1,0 +1,22 @@
+[package]
+name = "qingjian-windows-voice-worker"
+description = "Windows 输入法的本地语音识别 Worker 进程"
+version = "0.1.9-dev"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "qingjian-voice-worker"
+path = "src/main.rs"
+
+[dependencies]
+qingjian-platform.workspace = true
+qingjian-voice.workspace = true
+tracing.workspace = true
+
+[target."cfg(windows)".build-dependencies]
+winresource = "0.1.31"
+
+[lints]
+workspace = true

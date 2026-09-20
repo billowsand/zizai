@@ -8,6 +8,8 @@ mod preedit_mode;
 mod shortcut;
 mod status_bar;
 mod theme_mode;
+mod voice;
+mod voice_trigger;
 
 use std::path::Path;
 
@@ -28,6 +30,8 @@ pub use preedit_mode::PreeditMode;
 pub use shortcut::ShortcutConfig;
 pub use status_bar::StatusBarConfig;
 pub use theme_mode::ThemeMode;
+pub use voice::VoiceConfig;
+pub use voice_trigger::VoiceTrigger;
 
 /// 用户配置文件（TOML）。所有平台同一份格式，缺省值全部在各分节的 `Default` 里。
 ///
@@ -53,6 +57,9 @@ pub struct Config {
 
     /// 本地整句模型。
     pub model: LocalModelConfig,
+
+    /// Windows 本地语音输入。
+    pub voice: VoiceConfig,
 }
 
 fn deserialize_phrases<'de, D: serde::Deserializer<'de>>(
@@ -69,6 +76,8 @@ macro_rules! template_shortcut_keys {
         r#"# 数字键配这些修饰键删掉候选：用户词（云端选过的、自动造的）整个删掉，词库里的词清掉对它的学习记录。组句中要打感叹号先把词上屏
 # 任意修饰键组合（alt / shift / ctrl / win 用 + 连）。Alt+数字会被 Windows 当菜单快捷键截走，缺省用 Shift；组句时才拦，不打字时照常放行给应用
 delete_candidate = "shift"
+# 语音开关键（按一下开始、再按一下结束）：right_alt / right_ctrl / caps_lock / scroll_lock / off
+voice = "right_alt"
 "#
     };
 }
@@ -134,6 +143,18 @@ disabled = []
 [model]
 # 本地整句模型：随包的小模型在本机给整句候选重新排序，全程离线；停顿后几十毫秒生效。关掉只用词库统计
 enabled = true
+
+[voice]
+# 本地语音输入。模型文件不随源码仓库提供；准备好下面两项后再打开
+enabled = false
+model = "data/voice/sense-voice/model.int8.onnx"
+tokens = "data/voice/sense-voice/tokens.txt"
+language = "auto"
+# 留空使用系统默认麦克风
+input_device = ""
+# 可选 sherpa-onnx 同音词替换资源；留空关闭
+hr_lexicon = ""
+hr_rule_fsts = ""
 
 [status_bar]
 # 桌面上常驻、可拖动的悬浮状态条（Windows）：「中 / 英」格点一下切换模式（开着双拼时还显示方案名）、「，。」格切全角 / 半角标点、齿轮打开设置。

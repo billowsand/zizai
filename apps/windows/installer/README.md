@@ -1,6 +1,6 @@
 # 字在 Windows 安装包
 
-用 [Inno Setup](https://jrsoftware.org/isinfo.php) 打的安装包，把 TSF DLL（64 位与 32 位各一份）、Server、设置程序与随包数据一起装进
+用 [Inno Setup](https://jrsoftware.org/isinfo.php) 打的安装包，把 TSF DLL（64 位与 32 位各一份）、Server、语音 Worker、设置程序与随包数据一起装进
 `C:\Program Files\Qingjian`，注册文本服务，并设登录自启。
 
 ## 安装布局
@@ -17,15 +17,15 @@ C:\Program Files\Qingjian\
     assets\                   emoji\ sample\
 ```
 
-Server 与设置程序按 **exe 相对**定位随包资源（`qingjian_platform::resources`）：装机时资源与 exe 同级，
+Server、语音 Worker 与设置程序按 **exe 相对**定位随包资源（`qingjian_platform::resources`）：装机时资源与 exe 同级，
 开发时是仓库 `ime\`（exe 在 `target\{debug,release}\` 下往上三层）。相对写法两套布局一致，只有根不同。
 
-用户数据仍在 `%APPDATA%\Qingjian`（config.toml、学习数据、统计），三个进程的日志在 `%LOCALAPPDATA%\Qingjian\logs`（`server.` / `tsf.` / `settings.` 前缀，按天，留 7 天）；
+用户数据仍在 `%APPDATA%\Qingjian`（config.toml、学习数据、统计），日志在 `%LOCALAPPDATA%\Qingjian\logs`（`server.` / `tsf.` / `settings.` 前缀，按天，留 7 天）；
 卸载不动这些。图标由 `regsvr32` 写到 `%ProgramData%\Qingjian\qingjian.ico`（DLL 里 include_bytes 内嵌）。
 
 ## 安装程序做的几件事
 
-1. **结束旧进程**：`PrepareToInstall` 里 `taskkill` Server 与设置程序（只有这两个 exe 要覆盖）。
+1. **结束旧进程**：`PrepareToInstall` 里 `taskkill` Server、语音 Worker 与设置程序。
 2. **应用容器权限**：`icacls` 给安装目录加 `ALL APPLICATION PACKAGES`（SID `*S-1-15-2-1`）读+执行。
    不加的话 UWP/AppContainer 应用（任务栏搜索、设置）读不到 DLL，切不到字在。
 3. **注册文本服务**：64 位 DLL 用 `regsvr32`、32 位 DLL 用 `SysWOW64\regsvr32`，各注册一次（各自写进自己视图的 HKCR，`CTF\TIP` 两边共用；要管理员——安装程序本就提权）。
@@ -33,7 +33,7 @@ Server 与设置程序按 **exe 相对**定位随包资源（`qingjian_platform:
 5. **登录自启**：「启动」文件夹放 Server 快捷方式（Explorer 走 ShellExecute 拉起才拿到 uiAccess；计划任务拿不到）。
 6. **立即启动**：完成页以当前非提升用户 ShellExecute 起一次 Server，装完就能用，不必先注销。
 
-卸载反向：杀 Server / 设置程序 → 反注册当前版本 DLL → 删文件（占用中的 DLL 重启后删，`[UninstallDelete]` 兜住旧版本的）。
+卸载反向：杀 Server / 语音 Worker / 设置程序 → 反注册当前版本 DLL → 删文件（占用中的 DLL 重启后删，`[UninstallDelete]` 兜住旧版本的）。
 
 ## 升级：DLL 被占用怎么办
 
@@ -65,7 +65,21 @@ AppModel API 把框架包加进进程包图，Windows 10 上没有那两个函�
 powershell -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1
 ```
 
-脚本 release 构建三个产物、从 `apps\windows\server\Cargo.toml` 读版本、找 `ISCC.exe`、编 `qingjian.iss`，
+本地语音联调时可把已经准备好的 SenseVoice 一并放入测试包；目录须含 `model.int8.onnx` 与 `tokens.txt`：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1 -VoiceModelDir D:\auto-voice\models\sense-voice
+```
+
+此参数只用于本地测试，正式发布包不默认分发第三方模型。
+
+阶段测试包用 `-BuildLabel phase1-r1` 追加唯一标识；同一阶段重编时递增 `r2`、`r3`，避免不同二进制共用文件名：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1 -BuildLabel phase1-r1
+```
+
+脚本 release 构建 Windows 产物、从 `apps\windows\server\Cargo.toml` 读版本、找 `ISCC.exe`、编 `qingjian.iss`，
 成品在 `target\installer\Zizai-<版本>-Setup.exe`。改了数据 / 脚本但二进制没变时加 `-SkipBuild`；`-Sign` 用自签证书签产物
 （uiAccess 要求 Server 签名 + 装 Program Files）。
 

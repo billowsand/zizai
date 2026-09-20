@@ -8,9 +8,13 @@ use qingjian_core::sentence::SentenceScorer;
 use qingjian_platform::PreeditMode;
 use qingjian_platform::protocol::{
     ClientMessage, FUMA_PREEDIT_PROTOCOL, Frame, KeyEvent, KeyModifiers, KeyOutcome,
-    PROTOCOL_VERSION, PreeditKind, ScreenRect, ServerMessage, SessionId,
+    PROTOCOL_VERSION, PreeditKind, ScreenRect, ServerMessage, SessionId, VoiceAction, VoiceState,
 };
-use qingjian_windows_server::dispatch::{CandidateSink, StatusEvent, StatusSink, StatusView};
+use qingjian_voice::WorkerSnapshot;
+use qingjian_windows_server::dispatch::{
+    CandidateSink, StatusEvent, StatusSink, StatusView, VoiceView,
+};
+use qingjian_windows_server::voice::{VoiceBackend, VoiceBackendError};
 use qingjian_windows_server::{AssemblySpec, Router, RouterConfig, assembly};
 
 const SESSION: SessionId = SessionId(1);
@@ -595,6 +599,7 @@ fn status_bar_mode_click_is_handed_to_dll_via_sync_mode() {
         Some(ServerMessage::ModeSync {
             session: SESSION,
             english: Some(true),
+            voice: Default::default(),
         })
     );
     assert_eq!(
@@ -602,6 +607,7 @@ fn status_bar_mode_click_is_handed_to_dll_via_sync_mode() {
         Some(ServerMessage::ModeSync {
             session: SESSION,
             english: None,
+            voice: Default::default(),
         })
     );
 }
@@ -1029,6 +1035,177 @@ impl CandidateSink for RecordingCandidates {
     }
 
     fn set_font(&self, _font: String) {}
+}
+
+#[derive(Clone, Default)]
+struct RecordingVoiceCandidates {
+    views: Arc<Mutex<Vec<VoiceView>>>,
+
+    hides: Arc<Mutex<usize>>,
+}
+
+impl CandidateSink for RecordingVoiceCandidates {
+    fn show(&self, _frame: Frame, _rect: ScreenRect) {}
+
+    fn show_voice(&self, view: VoiceView, _rect: ScreenRect) {
+        self.views.lock().unwrap().push(view);
+    }
+
+    fn hide(&self) {
+        *self.hides.lock().unwrap() += 1;
+    }
+
+    fn set_font(&self, _font: String) {}
+}
+
+struct SharedVoiceBackend(Arc<Mutex<WorkerSnapshot>>);
+
+impl VoiceBackend for SharedVoiceBackend {
+    fn start(&mut self, request: u64) -> Result<(), VoiceBackendError> {
+        *self.0.lock().unwrap() = WorkerSnapshot {
+            state: VoiceState::Recording,
+            request: Some(request),
+            level: 420,
+            ..WorkerSnapshot::default()
+        };
+        Ok(())
+    }
+
+    fn stop(&mut self, request: u64) -> Result<(), VoiceBackendError> {
+        let partial = self.0.lock().unwrap().partial.clone();
+        *self.0.lock().unwrap() = WorkerSnapshot {
+            state: VoiceState::Recognizing,
+            request: Some(request),
+            partial,
+            ..WorkerSnapshot::default()
+        };
+        Ok(())
+    }
+
+    fn cancel(&mut self, _request: u64) -> Result<(), VoiceBackendError> {
+        *self.0.lock().unwrap() = WorkerSnapshot {
+            state: VoiceState::Idle,
+            ..WorkerSnapshot::default()
+        };
+        Ok(())
+    }
+
+    fn snapshot(&mut self) -> Result<WorkerSnapshot, VoiceBackendError> {
+        Ok(self.0.lock().unwrap().clone())
+    }
+}
+
+#[test]
+fn voice_reuses_candidate_window_at_the_current_caret() {
+    let mut router = router();
+    let worker = Arc::new(Mutex::new(WorkerSnapshot::default()));
+    router.configure_voice(
+        qingjian_platform::VoiceTrigger::RightAlt,
+        Box::new(SharedVoiceBackend(worker.clone())),
+    );
+    let sink = RecordingVoiceCandidates::default();
+    router.set_candidate_sink(Box::new(sink.clone()));
+
+    router.handle(ClientMessage::Voice {
+        session: SESSION,
+        action: VoiceAction::Start,
+    });
+    router.handle(ClientMessage::PositionCandidates {
+        session: SESSION,
+        rect: ScreenRect {
+            left: 300,
+            top: 200,
+            right: 302,
+            bottom: 220,
+        },
+    });
+    let first = sink.views.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(first.state, VoiceState::Recording);
+    assert_eq!(first.level, 420);
+
+    // 语音开始前的旧组句可能迟到一个收窗通知和空帧轮询；二者都不能把语音条关掉。
+    let hides_before = *sink.hides.lock().unwrap();
+    router.handle(ClientMessage::HideCandidates { session: SESSION });
+    assert_eq!(*sink.hides.lock().unwrap(), hides_before);
+    router.handle(ClientMessage::Poll { session: SESSION });
+    assert_eq!(*sink.hides.lock().unwrap(), hides_before);
+    assert_eq!(
+        sink.views.lock().unwrap().last().unwrap().state,
+        VoiceState::Recording
+    );
+
+    *worker.lock().unwrap() = WorkerSnapshot {
+        state: VoiceState::Recording,
+        request: Some(1),
+        level: 760,
+        partial: Some("正在实时转写".into()),
+        ..WorkerSnapshot::default()
+    };
+    router.handle(ClientMessage::SyncMode { session: SESSION });
+    let partial = sink.views.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(partial.text.as_deref(), Some("正在实时转写"));
+
+    router.handle(ClientMessage::Voice {
+        session: SESSION,
+        action: VoiceAction::Stop,
+    });
+    router.handle(ClientMessage::SyncMode { session: SESSION });
+    assert_eq!(
+        sink.views.lock().unwrap().last().unwrap().state,
+        VoiceState::Recognizing
+    );
+
+    *worker.lock().unwrap() = WorkerSnapshot {
+        state: VoiceState::Ready,
+        request: Some(1),
+        partial: Some("最终文字".into()),
+        text: Some("最终文字".into()),
+        ..WorkerSnapshot::default()
+    };
+    let response = router.handle(ClientMessage::SyncMode { session: SESSION });
+    let request = match response {
+        Some(ServerMessage::ModeSync { voice, .. }) => voice.delivery.unwrap().request,
+        other => panic!("expected voice delivery, got {other:?}"),
+    };
+    assert_eq!(
+        sink.views.lock().unwrap().last().unwrap().state,
+        VoiceState::Ready
+    );
+
+    router.handle(ClientMessage::VoiceAck {
+        session: SESSION,
+        request,
+    });
+    assert!(*sink.hides.lock().unwrap() > 0);
+
+    // 上一轮 ACK 可能由异步编辑会话迟到；下一轮已开始时，它不能关闭新的语音条。
+    router.handle(ClientMessage::Voice {
+        session: SESSION,
+        action: VoiceAction::Start,
+    });
+    router.handle(ClientMessage::PositionCandidates {
+        session: SESSION,
+        rect: ScreenRect {
+            left: 320,
+            top: 210,
+            right: 322,
+            bottom: 230,
+        },
+    });
+    let hides_before = *sink.hides.lock().unwrap();
+    router.handle(ClientMessage::VoiceAck {
+        session: SESSION,
+        request,
+    });
+    assert_eq!(*sink.hides.lock().unwrap(), hides_before);
+    assert_eq!(
+        sink.views.lock().unwrap().last().unwrap().state,
+        VoiceState::Recording
+    );
+
+    // 同理，普通组句的迟到 Commit 只能清拼音，不能收掉活跃语音条。
+    router.handle(ClientMessage::Commit { session: SESSION });
+    assert_eq!(*sink.hides.lock().unwrap(), hides_before);
 }
 
 /// 按 `[general] preedit` 敲一串拼音，返回（发给 DLL 的帧，候选窗口画的那帧）。

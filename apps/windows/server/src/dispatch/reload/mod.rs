@@ -16,6 +16,7 @@ pub(super) use self::state::ConfigReload;
 pub(super) const CONFIG_POLL_INTERVAL: Duration = Duration::from_secs(1);
 use super::{Router, RouterConfig};
 use crate::assembly::user_dicts_dir;
+use crate::voice::ProcessVoiceBackend;
 
 fn mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path)
@@ -56,6 +57,10 @@ impl Router {
     ) {
         let last_mtime = mtime(&config_path);
         let bundled_dicts_dir = Some(root.join("data/generated/dicts")).filter(|dir| dir.is_dir());
+        let voice_worker = std::env::current_exe().ok().and_then(|path| {
+            path.parent()
+                .map(|parent| parent.join("qingjian-voice-worker.exe"))
+        });
         self.reload = Some(ConfigReload {
             config_path,
             last_check: Instant::now(),
@@ -64,6 +69,9 @@ impl Router {
             user_dir,
             last_mtime,
             applied_dictionaries: config.dictionaries.clone(),
+            applied_voice: config.voice.clone(),
+            applied_voice_trigger: config.shortcut.voice,
+            voice_worker,
         });
     }
 
@@ -125,6 +133,7 @@ impl Router {
         }
         self.reconcile_status();
         self.apply_model_config(&config.model);
+        self.apply_voice_config(config);
 
         let Some(reload) = &mut self.reload else {
             return;
@@ -139,6 +148,45 @@ impl Router {
             tracing::info!(count = dicts.len(), "附加词库已热重装");
             self.engine.set_extra_dictionaries(dicts);
             reload.applied_dictionaries = config.dictionaries.clone();
+        }
+    }
+
+    fn apply_voice_config(&mut self, config: &Config) {
+        let Some(reload) = self.reload.as_ref() else {
+            return;
+        };
+        if config.voice == reload.applied_voice
+            && config.shortcut.voice == reload.applied_voice_trigger
+        {
+            return;
+        }
+        let root = reload.root.clone();
+        let worker = reload.voice_worker.clone();
+        if let Some(reload) = self.reload.as_mut() {
+            reload.applied_voice = config.voice.clone();
+            reload.applied_voice_trigger = config.shortcut.voice;
+        }
+        self.voice.disable();
+        if !config.voice.enabled || config.shortcut.voice.virtual_key().is_none() {
+            tracing::info!("语音输入已关闭");
+            return;
+        }
+        let Some(worker) = worker else {
+            self.voice
+                .configure_failure(config.shortcut.voice, "找不到语音工作进程".into());
+            return;
+        };
+        match ProcessVoiceBackend::spawn_configured(&worker, &root, &config.voice) {
+            Ok(backend) => {
+                self.voice
+                    .configure(config.shortcut.voice, Box::new(backend));
+                tracing::info!("语音配置已热加载");
+            }
+            Err(error) => {
+                tracing::error!(%error, "热加载语音 Worker 失败");
+                self.voice
+                    .configure_failure(config.shortcut.voice, "语音工作进程启动失败".into());
+            }
         }
     }
 }

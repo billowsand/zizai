@@ -1,10 +1,10 @@
 ﻿<#
 .SYNOPSIS
-    在 Windows 上打青简安装包：release 构建三个产物 + 用 Inno Setup 编 qingjian.iss。
+    在 Windows 上打字在安装包：release 构建 TSF、Server、语音 Worker 与设置程序，再用 Inno Setup 编 qingjian.iss。
     设置程序缺省用 egui 那份（见 -WinUiSettings）。
 .DESCRIPTION
     在编译机（MSVC 工具链 + Inno Setup）上跑。步骤：
-      1) cargo build --release 出 DLL / Server / 设置程序，再单独编一份 32 位 DLL；
+      1) cargo build --release 出 DLL / Server / 语音 Worker / 设置程序，再单独编一份 32 位 DLL；
       2) 从 apps\windows\server\Cargo.toml 读版本号（-dev 版接 git 短哈希）；
       3) 找 ISCC.exe（PATH 或常见安装位置）；
       4) iscc /DAppVersion=<版本> 编脚本，成品在 target\installer\Zizai-<版本>-Setup.exe。
@@ -30,9 +30,24 @@
     设置程序换回 WinUI 3 那一份（qingjian-settings.exe + 118 项 / 56 MB 自包含 Windows App Runtime）。
     **缺省是 egui 那份**（qingjian-settings-egui.exe，按正式名字装，不带运行时）；这个开关只在要对比时用，
     成品另起名 Zizai-<版本>-winui-Setup.exe，不覆盖正式包。
+.PARAMETER VoiceModelDir
+    可选的 SenseVoice 模型目录，必须含 model.int8.onnx 与 tokens.txt。仅用于本地测试包；
+    正式发布仍不默认携带模型，避免把模型许可与源码许可混为一谈。
+.PARAMETER BuildLabel
+    可选的阶段测试标识（仅允许字母、数字、点和短横线），追加到版本号与安装包文件名。
+    同一阶段重新打包时递增 r1、r2，避免不同二进制共用文件名。
 #>
 [CmdletBinding()]
-param([switch]$SkipBuild, [switch]$Sign, [switch]$WinUiSettings, [switch]$NoPackage, [switch]$PackageOnly, [switch]$PreSigned)
+param(
+    [switch]$SkipBuild,
+    [switch]$Sign,
+    [switch]$WinUiSettings,
+    [switch]$NoPackage,
+    [switch]$PackageOnly,
+    [switch]$PreSigned,
+    [string]$VoiceModelDir,
+    [string]$BuildLabel
+)
 
 $ErrorActionPreference = 'Stop'
 
@@ -71,13 +86,13 @@ if ($Sign) {
     Write-Host 'uiAccess=0（对外分发：Server 任何机器都能起；候选窗在商店 / 任务栏搜索里可能被盖）' -ForegroundColor Cyan
 }
 
-# 1) 构建三个产物。-PackageOnly 假定产物已在 target\（CI 签名分段流程），跳过。
+# 1) 构建 Windows 产物。-PackageOnly 假定产物已在 target\（CI 签名分段流程），跳过。
 if (-not $SkipBuild -and -not $PackageOnly) {
     Write-Host '构建 release 产物…' -ForegroundColor Cyan
     Push-Location $Repo
     try {
         $settingsPackage = if ($WinUiSettings) { 'qingjian-windows-settings' } else { 'qingjian-windows-settings-egui' }
-        cargo build --release --locked -p qingjian-windows-server -p qingjian-windows-tsf -p $settingsPackage
+        cargo build --release --locked -p qingjian-windows-server -p qingjian-windows-voice-worker -p qingjian-windows-tsf -p $settingsPackage
         if ($LASTEXITCODE -ne 0) { throw "cargo build 失败（退出码 $LASTEXITCODE）" }
         cargo build --release --locked -p qingjian-windows-tsf --target i686-pc-windows-msvc
         if ($LASTEXITCODE -ne 0) { throw "32 位 DLL cargo build 失败（退出码 $LASTEXITCODE）" }
@@ -89,6 +104,7 @@ $targets = @(
     'release\qingjian_tsf.dll',
     'i686-pc-windows-msvc\release\qingjian_tsf.dll',
     'release\qingjian-server.exe',
+    'release\qingjian-voice-worker.exe',
     $(if ($WinUiSettings) { 'release\qingjian-settings.exe' } else { 'release\qingjian-settings-egui.exe' })
 )
 foreach ($t in $targets) {
@@ -171,10 +187,19 @@ if ($Version.EndsWith('-dev')) {
     try {
         $rev = (git rev-parse --short HEAD 2>$null)
         if ($LASTEXITCODE -eq 0 -and $rev) {
-            if (git status --porcelain 2>$null) { $rev = "$rev+" }
+            # 某些开发机的全局 core.excludesFile 指向已不可读路径；版本脏标记不应因此让整个打包失败。
+            $emptyExclude = Join-Path $Repo 'target\installer\empty-git-excludes'
+            if (-not (Test-Path $emptyExclude)) { Set-Content -LiteralPath $emptyExclude -Value '' -NoNewline }
+            if (git -c "core.excludesFile=$emptyExclude" status --porcelain 2>$null) { $rev = "$rev+" }
             $Version = "$Version-$rev"
         }
     } finally { Pop-Location }
+}
+if ($BuildLabel) {
+    if ($BuildLabel -notmatch '^[A-Za-z0-9][A-Za-z0-9.-]*$') {
+        throw '-BuildLabel 只允许字母、数字、点和短横线，且必须以字母或数字开头'
+    }
+    $Version = "$Version-$BuildLabel"
 }
 # Inno 的 VersionInfoVersion 只认数字：去掉 -alpha.1 这类预发布后缀。
 $VersionNumeric = $Version -replace '-.*$', ''
@@ -194,6 +219,17 @@ if ($missingData.Count -gt 0) {
     throw "缺随包数据：$($missingData -join '、')。本机生成或从 data Release 取，见 apps\windows\installer\README.md"
 }
 Write-Host "随包数据齐全（含 $($domainDicts.Count) 本领域词库）" -ForegroundColor Cyan
+
+if ($VoiceModelDir) {
+    $VoiceModelDir = (Resolve-Path -LiteralPath $VoiceModelDir).Path
+    $missingVoice = @('model.int8.onnx', 'tokens.txt') | Where-Object {
+        -not (Test-Path -LiteralPath (Join-Path $VoiceModelDir $_))
+    }
+    if ($missingVoice.Count -gt 0) {
+        throw "语音模型目录缺文件：$($missingVoice -join '、')（$VoiceModelDir）"
+    }
+    Write-Host "本地测试包携带 SenseVoice 模型：$VoiceModelDir" -ForegroundColor Yellow
+}
 
 # 3) 找 ISCC.exe：先 Program Files 与每用户安装的 7（与开发机同版本；CI 镜像 PATH 上自带 Chocolatey 的 6，不带简中翻译，不能让它抢先），
 #    再 PATH，最后 6。QINGJIAN_ISCC 环境变量可直接指定。
@@ -224,6 +260,7 @@ Write-Host "用 $iscc" -ForegroundColor Cyan
 # 4) 编安装包。
 $isccArgs = @("/DAppVersion=$Version", "/DAppVersionNumeric=$VersionNumeric")
 if ($WinUiSettings) { $isccArgs += '/DWinUiSettings=1' }
+if ($VoiceModelDir) { $isccArgs += "/DVoiceModelDir=$VoiceModelDir" }
 & $iscc @isccArgs $Iss
 if ($LASTEXITCODE -ne 0) { throw "iscc 失败（退出码 $LASTEXITCODE）" }
 

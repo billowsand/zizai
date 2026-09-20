@@ -114,7 +114,9 @@ fn poll_once(context: &PollContext) {
     if !context.shared.composing() {
         let tick = context.ticks.get().wrapping_add(1);
         context.ticks.set(tick);
-        if context.shared.foreground() && tick.is_multiple_of(MODE_SYNC_EVERY) {
+        if context.shared.foreground()
+            && (context.shared.voice_active() || tick.is_multiple_of(MODE_SYNC_EVERY))
+        {
             sync_mode(context);
         }
         return;
@@ -153,8 +155,8 @@ fn sync_mode(context: &PollContext) {
     let Some(client) = guard.as_mut() else {
         return;
     };
-    let english = match client.sync_mode() {
-        Ok(english) => english,
+    let (english, voice) = match client.sync_mode() {
+        Ok(sync) => sync,
         Err(error) => {
             note_error("同步中英模式失败", &error);
             *guard = None;
@@ -165,4 +167,5 @@ fn sync_mode(context: &PollContext) {
     if let Some(english) = english {
         super::service::on_mode_sync(english);
     }
+    super::service::on_voice_sync(voice);
 }

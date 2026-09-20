@@ -30,7 +30,7 @@ Rust 工具链由 `rust-toolchain.toml` 钉版本（现在 1.96.0），workflow 
 
 **代码签名走 SignPath Foundation 免费开源证书**（申请、面板与仓库配置、审批时序见 `docs/design/code-signing.md`，
 一、二、五步是一次性配置）：CI 里 `secrets.SIGNPATH_API_TOKEN` 与 `vars.SIGNPATH_PROJECT_SLUG` 配齐即启用——
-构建四个 PE → 送 SignPath 签回 → 打包（已签文件原样进包）→ 安装包再签 → 建 Release。
+构建五个 PE（含语音 Worker）→ 送 SignPath 签回 → 打包（已签文件原样进包）→ 安装包再签 → 建 Release。
 签名请求要审批人在 SignPath 面板手动批准（基金会条款：每个 Release 都批），CI 挂起最长等 2 小时。
 签名生效后 Server 自动嵌 uiAccess（`QINGJIAN_UIACCESS=1`，签名链就绪才置位）：候选窗不再被任务栏搜索 /
 「设置」这类高 z-band 宿主盖住；TSF DLL 签名后也能进 UWP / 系统应用。没配齐时退回旧行为（不签名、uiAccess=0），不挡发版。
@@ -107,7 +107,7 @@ cargo 命令全 `--locked`（含 `build.ps1`）。普通 CI 只有 `contents: re
 
 ## 本机打包
 
-`powershell -File apps/windows/installer/build.ps1`：release 构建三个产物 + 32 位 DLL，再用 Inno Setup 编安装包，
+`powershell -File apps/windows/installer/build.ps1`：release 构建 Server、语音 Worker、设置程序、TSF DLL + 32 位 DLL，再用 Inno Setup 编安装包，
 成品在 `target\installer\Zizai-<版本>-Setup.exe`。数据或脚本改了、二进制没变时加 `-SkipBuild`；`-Sign` 用自签证书签产物（本机真机测用）。
 **对外分发的包不要本地打**：走 `release.yml`（SignPath 签名，见 docs/design/code-signing.md）。CI 分段用的
 `-NoPackage`（只构建）与 `-PackageOnly -PreSigned`（产物已被 SignPath 签回，打包前校验签名）一般只在 workflow 里用。

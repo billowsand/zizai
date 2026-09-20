@@ -6,8 +6,10 @@ mod anchor;
 mod selection;
 mod surrounding;
 mod update;
+mod voice_anchor;
 
 pub(crate) use self::anchor::anchor_rect;
 pub(crate) use self::selection::selection_start;
 pub(crate) use self::surrounding::{InputContext, input_context};
-pub(crate) use self::update::request_update;
+pub(crate) use self::update::{request_update, request_voice_update};
+pub(crate) use self::voice_anchor::request_voice_anchor;

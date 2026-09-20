@@ -32,13 +32,16 @@ mod tests;
 /// （只能重启系统），上面第一条就是为这个加的。
 ///
 /// 7 → 8 只有一处：`Frame` 加了有默认值的 `color_scheme`（旧 DLL 忽略它；给旧 DLL 的 `theme` 照旧写 `system`）。
-pub const PROTOCOL_VERSION: u32 = 8;
+/// 8 → 9 增加语音控制消息与 `ModeSync.voice`；新字段有默认值，旧 DLL 会忽略。
+/// 9 → 10 增加语音电平与临时转写，供同一个候选窗口画录音态。
+pub const PROTOCOL_VERSION: u32 = 10;
 
 /// 从这版起 preedit 里可能出现 [`PreeditKind::Fuma`]；更早的 DLL 要降级成它认识的种类。
 pub const FUMA_PREEDIT_PROTOCOL: u32 = 5;
 
 pub mod frame;
 pub mod key;
+pub mod voice;
 
 pub use client::ClientMessage;
 pub use codec::{
@@ -49,3 +52,4 @@ pub use key::{KeyEvent, KeyModifiers, KeyOutcome};
 pub use screen_rect::ScreenRect;
 pub use server::ServerMessage;
 pub use session::SessionId;
+pub use voice::{VoiceAction, VoiceDelivery, VoiceState, VoiceSync};

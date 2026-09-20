@@ -6,7 +6,7 @@ use std::rc::Rc;
 use qingjian_platform::ColorScheme;
 use qingjian_render::{
     FontLibrary, Frame, Rendered, RenderedStatus, Renderer, Shadow, StatusCell, Theme, UiFont,
-    system_fonts,
+    VoiceFrame, system_fonts,
 };
 
 /// UI 线程上共享的渲染器。
@@ -85,6 +85,20 @@ impl Painter {
             "候选窗位图已画"
         );
         Some(rendered)
+    }
+
+    /// 画在同一个候选 HWND 里的语音态。
+    pub(super) fn render_voice(
+        &mut self,
+        frame: &VoiceFrame,
+        color_scheme: ColorScheme,
+        dark: bool,
+        dpi: u32,
+    ) -> Option<Rendered> {
+        self.renderer
+            .render_voice(frame, &theme(color_scheme, dark), scale(dpi), Some(&SHADOW))
+            .inspect_err(|error| tracing::warn!(%error, "语音面板渲染失败"))
+            .ok()
     }
 
     /// 画状态条。

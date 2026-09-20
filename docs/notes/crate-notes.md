@@ -113,6 +113,13 @@ Engine 侧在 `engine/rescoring/`：接了打分器就取 Viterbi 前 `RESCORE_P
 主题颜色按角色拆开：品牌强调 / 输入光标 / 云服务 / 生词 / 纠错各有独立字段；`Palette` 提供奶油、字在蓝、紫藤拿铁、森林四套浅 / 深色，值见 `docs/design/brand.md`。
 设计与验收见 `docs/design/rendering.md`。
 
+## crates/qingjian-voice
+
+Windows 本地语音输入的可复用层：`Controller` 在后台线程加载 sherpa-onnx SenseVoice，按命令打开 / 关闭默认或指定麦克风，
+把交错 PCM 混成单声道并重采样到 16 kHz，最终只返回非空识别文本。`WorkerRequest` / `WorkerResponse` 使用平台层的
+长度前缀 JSON 帧在 stdio 上传输；不含全局键盘钩子、剪贴板、模拟粘贴、联网或 LLM。
+实现源自 auto-voice（MIT，Copyright (c) 2026 billowsand），完整许可见根目录 `THIRD_PARTY_NOTICES.md`。
+
 ## apps/cli
 
 测试工具，`cargo run -p qingjian-cli -- kaifa`。
@@ -128,10 +135,17 @@ Engine 侧在 `engine/rescoring/`：接了打分器就取 Viterbi 前 `RESCORE_P
 
 ## apps/windows
 
-一个产品两个 package：`server`（Server 进程：IPC 分派 + Engine + 命名管道 + 自绘候选窗与悬浮状态条）与 `tsf`（TSF 文本服务 DLL，lib 名固定 `qingjian_tsf`），
+Windows 产品由 `server`（IPC 分派 + Engine + 自绘候选窗与悬浮状态条）、`voice-worker`（独立语音采集 / 识别进程）与
+`tsf`（TSF 文本服务 DLL，lib 名固定 `qingjian_tsf`）组成，
 外加 `settings-egui`（设置程序，打包缺省用它）、`settings`（WinUI 3 的那份，`build.ps1 -WinUiSettings` 才打，见 `notes/egui-settings-spike.md`）
 与 `installer`（Inno Setup）。不合成一个 crate，因为 DLL 不能带 Engine 的依赖树，见 `apps/windows/README.md`；
 协议类型在 `qingjian-platform::protocol`，设计见 `docs/design/architecture.md`「Windows：TSF」。
+
+语音输入由 Server 启动同目录的 `qingjian-voice-worker.exe`，通过私有 stdio 帧协议控制。TSF 拦截 `[shortcut] voice`
+配置的语音开关键，经既有 `SyncMode` 轮询获得 `VoiceSync`；最终文本由异步 `RequestEditSession` 直接写入开始录音时的文档，
+成功后发 `VoiceAck`。Server 在 ACK 前重复交付，TSF 记录“已排队 / 已写入未确认”请求号，因此重连不会重复插字。
+普通键入、失焦、切走输入法或关闭会话会取消当前听写；密码框的键盘禁用 compartment 直接放行语音键。
+配置 `[voice]` 缺省关闭，模型路径相对随包根；配置变化会停掉当前请求并重启 Worker。
 
 用户可见品牌是「字在」，内部 crate、可执行文件、`Qingjian` 数据与安装目录、`.qj` 格式名暂不迁移。图标矢量源在 `assets/icon/logo.svg`，
 `assets/icon/generate.py` 生成主 PNG 与 TSF / 设置 / Server / 安装器共用的多尺寸 `qingjian.ico`。
@@ -141,6 +155,9 @@ Engine 侧在 `engine/rescoring/`：接了打分器就取 Viterbi 前 `RESCORE_P
 
 TSF 原有数字 / OEM 标点 / 空格键码按当前布局用 `ToUnicodeEx` 解析（bit 2 避免改变键盘状态），
 仅接受单个非代理项 UTF-16 单元。字母、小键盘和 AltGr 处理不变，不保证组合音符输入。
+
+TSF 正常收键不写逐键文件日志，也不记录字符、preedit 或上屏正文；同步路径耗时只在进程内用原子计数按
+`<1 / 2 / 4 / 8 / 16 / 32 / >=32 ms` 分桶，停用文本服务时向当天日志写一条汇总。连接、协议、编辑会话等低频异常仍即时记日志。
 
 Server 没起来时 DLL 自己拉（`client/launch.rs`）：管道不在就 `ShellExecuteW` 起同目录的 `qingjian-server.exe`
 （uiAccess 的 exe 只能经外壳拉起，`CreateProcess` 报 740），`Local\Qingjian.ServerLaunch` 互斥体跨进程去重，

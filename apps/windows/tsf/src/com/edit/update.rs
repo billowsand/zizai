@@ -33,6 +33,9 @@ pub(crate) struct UpdateSession {
 
     /// 本次组句拼音行；空串表示收起组句。
     preedit: String,
+
+    /// 语音听写请求；只有文档写入成功后才确认。
+    voice_ack: Option<u64>,
 }
 
 impl ITfEditSession_Impl for UpdateSession_Impl {
@@ -49,12 +52,43 @@ impl ITfEditSession_Impl for UpdateSession_Impl {
             )
         }));
         match result {
-            Ok(Ok(())) => Ok(()),
+            Ok(Ok(())) => {
+                if let Some(request) = self.voice_ack {
+                    self.shared.set_voice_queued(None);
+                    self.shared.set_voice_committed(Some(request));
+                    let acked = if let Ok(mut guard) = self.engine.try_borrow_mut() {
+                        match guard.as_mut() {
+                            Some(client) => match client.voice_ack(request) {
+                                Ok(()) => true,
+                                Err(error) => {
+                                    log(&format!("语音结果已写入，但确认发送失败: {error}"));
+                                    *guard = None;
+                                    false
+                                }
+                            },
+                            None => false,
+                        }
+                    } else {
+                        false
+                    };
+                    if acked {
+                        self.shared.set_voice_committed(None);
+                        self.shared.set_voice_active(false);
+                    }
+                }
+                Ok(())
+            }
             Ok(Err(error)) => {
+                if self.voice_ack.is_some() {
+                    self.shared.set_voice_queued(None);
+                }
                 log(&format!("组句更新失败: {error}"));
                 Err(error)
             }
             Err(_) => {
+                if self.voice_ack.is_some() {
+                    self.shared.set_voice_queued(None);
+                }
                 log("组句更新回调 panic（已兜住）");
                 Err(Error::from(E_FAIL))
             }
@@ -77,6 +111,27 @@ pub(crate) fn request_update(
         shared,
         commit,
         preedit,
+        voice_ack: None,
+    };
+    request(context, client_id, session.into(), TF_ES_READWRITE)
+}
+
+/// 请求把一次最终听写文本直接写进文档；成功写入后在回调内向 Server ACK。
+pub(crate) fn request_voice_update(
+    context: &ITfContext,
+    client_id: u32,
+    engine: SharedClient,
+    shared: Rc<Shared>,
+    request_id: u64,
+    text: String,
+) -> Result<()> {
+    let session = UpdateSession {
+        context: context.clone(),
+        engine,
+        shared,
+        commit: Some(text),
+        preedit: String::new(),
+        voice_ack: Some(request_id),
     };
     request(context, client_id, session.into(), TF_ES_READWRITE)
 }

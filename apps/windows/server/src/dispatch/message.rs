@@ -42,7 +42,10 @@ impl Router {
                 );
                 None
             }
-            ClientMessage::Key { session, event } => Some(self.handle_key(session, event)),
+            ClientMessage::Key { session, event } => {
+                self.voice.cancel();
+                Some(self.handle_key(session, event))
+            }
             ClientMessage::Poll { session } => Some(self.handle_poll(session)),
             ClientMessage::Commit { session } => {
                 let text = self.commit_raw_for(session);
@@ -68,7 +71,15 @@ impl Router {
             ClientMessage::HideCandidates { session } => {
                 // 组句在 DLL 侧结束（应用终止组句）：只收窗口；缓冲留给下一键的 Commit 清。
                 if self.focused == Some(session) {
-                    self.hide_candidate_window();
+                    // 语音条复用候选窗。语音开始后，DLL 可能补发上一轮组句的收窗通知；
+                    // 这条旧通知不能盖过正在进行的语音会话。
+                    if self.voice.owns(session) {
+                        tracing::debug!(?session, "语音进行中，忽略候选窗隐藏请求");
+                        let voice = self.voice.sync(session);
+                        self.reconcile_voice(session, &voice);
+                    } else {
+                        self.hide_candidate_window();
+                    }
                 }
                 None
             }
@@ -77,16 +88,42 @@ impl Router {
                 self.handle_mode_changed(english);
                 None
             }
-            ClientMessage::SyncMode { session } => Some(ServerMessage::ModeSync {
-                session,
-                english: self.take_pending_mode(),
-            }),
+            ClientMessage::SyncMode { session } => {
+                let voice = self.voice.sync(session);
+                self.reconcile_voice(session, &voice);
+                Some(ServerMessage::ModeSync {
+                    session,
+                    english: self.take_pending_mode(),
+                    voice,
+                })
+            }
+            ClientMessage::Voice { session, action } => {
+                tracing::info!(?session, ?action, "收到语音快捷键动作");
+                if action == qingjian_platform::protocol::VoiceAction::Start {
+                    self.ensure_focus(session);
+                    self.voice_notice_until = None;
+                    self.voice_notice_seen = false;
+                }
+                self.voice.handle(session, action);
+                None
+            }
+            ClientMessage::VoiceAck { session, request } => {
+                self.voice.ack(session, request);
+                if self.voice_visible {
+                    self.hide_candidate_window();
+                }
+                self.voice_notice_until = None;
+                self.voice_notice_seen = false;
+                None
+            }
             ClientMessage::ImeSwitched { session } => {
                 tracing::debug!(?session, "切成了别的输入法");
+                self.voice.cancel_for(session);
                 self.handle_ime_switched();
                 None
             }
             ClientMessage::CloseSession { session } => {
+                self.voice.cancel_for(session);
                 self.sessions.remove(&session);
                 if self.focused == Some(session) {
                     self.reset_composition();

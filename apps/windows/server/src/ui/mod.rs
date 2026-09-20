@@ -35,7 +35,7 @@ use self::candidates::CandidateWindow;
 use self::command::UiCommand;
 use self::painter::{Painter, SharedPainter};
 use self::status::StatusBar;
-use crate::dispatch::{CandidateSink, StatusEvent, StatusSink, StatusView};
+use crate::dispatch::{CandidateSink, StatusEvent, StatusSink, StatusView, VoiceView};
 
 /// 状态条上的操作（点格子 / 拖动结束）回给 Router 的回调，UI 线程上调。
 pub type StatusEvents = Box<dyn Fn(StatusEvent) + Send>;
@@ -83,6 +83,10 @@ impl UiHandle {
 impl CandidateSink for UiHandle {
     fn show(&self, frame: Frame, rect: ScreenRect) {
         self.post(UiCommand::Show(Box::new((frame, rect))));
+    }
+
+    fn show_voice(&self, view: VoiceView, rect: ScreenRect) {
+        self.post(UiCommand::ShowVoice(Box::new((view, rect))));
     }
 
     fn hide(&self) {
@@ -187,6 +191,11 @@ fn apply(
         UiCommand::Show(payload) => {
             let (frame, rect) = *payload;
             window.set_content(&frame);
+            window.show(to_win_rect(rect));
+        }
+        UiCommand::ShowVoice(payload) => {
+            let (view, rect) = *payload;
+            window.set_voice(view);
             window.show(to_win_rect(rect));
         }
         UiCommand::Hide => window.hide(),

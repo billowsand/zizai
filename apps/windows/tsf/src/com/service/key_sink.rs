@@ -2,18 +2,27 @@
 //! 吃的键在 `OnKeyDown` 里转发给 Server 并按结果更新文档；单击 Shift 的判定也在这里。
 //! 上下文禁了键盘（密码框，见 [`context`](crate::com::context)）时没在组句的键一律放行。
 
+use std::time::Instant;
+
 use windows::Win32::Foundation::{FALSE, LPARAM, WPARAM};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyState, VK_CONTROL, VK_ESCAPE, VK_MENU, VK_RCONTROL, VK_RMENU,
+};
 use windows::Win32::UI::TextServices::{ITfContext, ITfKeyEventSink_Impl};
 use windows::core::{BOOL, GUID, Ref, Result};
 
-use qingjian_platform::protocol::{KeyEvent, KeyOutcome};
+use qingjian_platform::VoiceTrigger;
+use qingjian_platform::protocol::{KeyEvent, KeyOutcome, VoiceAction};
 
 use super::TextService_Impl;
 use super::next::Next;
 use crate::client::mismatch;
 use crate::com::composition::preedit_string;
+use crate::com::edit::request_voice_anchor;
 use crate::com::key::event::{digit_key, is_edit, is_letter, is_nav, to_key_event};
 use crate::com::log::log;
+
+const VOICE_TOGGLE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(350);
 
 impl ITfKeyEventSink_Impl for TextService_Impl {
     /// 获焦：补一次连接（Server 起晚了 / 重启过），并刷指示器（系统会在切换焦点时重置它）。
@@ -24,6 +33,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             self.ensure_connected();
             self.refresh_mode_indicator();
         } else {
+            self.cancel_voice();
             self.commit_pending();
         }
         Ok(())
@@ -36,6 +46,12 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         if self.keyboard_disabled(&pic) {
             return Ok(FALSE);
         }
+        if self.shared.voice_active() && vk == VK_ESCAPE.0 as u32 {
+            return Ok(true.into());
+        }
+        if self.voice_key_down(vk, lparam) {
+            return Ok(true.into());
+        }
         Ok(self.would_eat(&self.key_event(vk)).into())
     }
 
@@ -45,17 +61,58 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         if self.keyboard_disabled(&pic) {
             return Ok(FALSE);
         }
+        if self.shared.voice_active() && vk == VK_ESCAPE.0 as u32 {
+            log("Esc 取消语音输入");
+            self.cancel_voice();
+            return Ok(true.into());
+        }
+        if self.voice_key_down(vk, lparam) {
+            self.shared.set_voice_key_held(true);
+            log(&format!(
+                "语音快捷键按下（等待松开触发） trigger={:?} vk=0x{vk:02X} extended={}",
+                self.shared.voice_trigger(),
+                extended_key(lparam)
+            ));
+            return Ok(true.into());
+        }
         let event = self.key_event(vk);
         Ok(self.handle_key(pic, event).into())
     }
 
-    fn OnTestKeyUp(&self, _pic: Ref<ITfContext>, wparam: WPARAM, _lparam: LPARAM) -> Result<BOOL> {
-        self.note_key_up(wparam.0 as u32);
+    fn OnTestKeyUp(&self, pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
+        let vk = wparam.0 as u32;
+        self.note_key_up(vk);
+        if self.keyboard_disabled(&pic) {
+            return Ok(FALSE);
+        }
+        if self.voice_key_up(vk, lparam) {
+            return Ok(true.into());
+        }
         Ok(FALSE)
     }
 
-    fn OnKeyUp(&self, _pic: Ref<ITfContext>, wparam: WPARAM, _lparam: LPARAM) -> Result<BOOL> {
-        self.note_key_up(wparam.0 as u32);
+    fn OnKeyUp(&self, pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
+        let vk = wparam.0 as u32;
+        self.note_key_up(vk);
+        if self.keyboard_disabled(&pic) {
+            return Ok(FALSE);
+        }
+        if self.voice_key_up(vk, lparam) {
+            self.shared.set_voice_key_held(false);
+            let now = Instant::now();
+            if is_debounced(self.last_voice_toggle.get(), now) {
+                log("语音快捷键重复触发已忽略");
+                return Ok(true.into());
+            }
+            self.last_voice_toggle.set(Some(now));
+            let action = toggle_voice_action(self.shared.voice_active());
+            log(&format!(
+                "语音快捷键触发 action={action:?} trigger={:?} vk=0x{vk:02X} extended={}",
+                self.shared.voice_trigger(),
+                extended_key(lparam)
+            ));
+            return Ok(self.handle_voice_key(pic, action).into());
+        }
         Ok(FALSE)
     }
 
@@ -66,6 +123,89 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
 }
 
 impl TextService_Impl {
+    fn voice_key_down(&self, vk: u32, lparam: LPARAM) -> bool {
+        let trigger = self.shared.voice_trigger();
+        is_voice_key_down(
+            trigger,
+            vk,
+            extended_key(lparam),
+            key_down(VK_RMENU),
+            key_down(VK_RCONTROL),
+        )
+    }
+
+    fn voice_key_up(&self, vk: u32, lparam: LPARAM) -> bool {
+        let trigger = self.shared.voice_trigger();
+        trigger.virtual_key() == Some(vk)
+            || (self.shared.voice_key_held()
+                && match trigger {
+                    VoiceTrigger::RightAlt => vk == VK_MENU.0 as u32,
+                    VoiceTrigger::RightCtrl => vk == VK_CONTROL.0 as u32,
+                    _ => false,
+                })
+            || is_voice_key_down(
+                trigger,
+                vk,
+                extended_key(lparam),
+                key_down(VK_RMENU),
+                key_down(VK_RCONTROL),
+            )
+    }
+
+    fn handle_voice_key(&self, pic: Ref<ITfContext>, action: VoiceAction) -> bool {
+        if action == VoiceAction::Start {
+            self.commit_pending();
+        }
+        let Ok(context) = pic.ok() else {
+            return false;
+        };
+        self.shared.set_last_context(Some(context.clone()));
+        if !self.ensure_connected() {
+            return false;
+        }
+        let result = self
+            .engine
+            .borrow_mut()
+            .as_mut()
+            .expect("ensure_connected returned true without a client")
+            .voice(action);
+        match result {
+            Ok(()) => {
+                if action == VoiceAction::Start {
+                    self.shared.set_voice_active(true);
+                    if let Err(error) = request_voice_anchor(
+                        context,
+                        self.client_id.get(),
+                        self.engine.clone(),
+                        self.shared.clone(),
+                    ) {
+                        log(&format!("语音面板定位会话没被受理: {error}"));
+                    }
+                }
+                true
+            }
+            Err(error) => {
+                log(&format!("发送语音动作失败: {error}"));
+                self.disconnect();
+                false
+            }
+        }
+    }
+
+    pub(super) fn cancel_voice(&self) {
+        if !self.shared.voice_active() {
+            return;
+        }
+        if let Ok(mut guard) = self.engine.try_borrow_mut()
+            && let Some(client) = guard.as_mut()
+        {
+            let _ = client.voice(VoiceAction::Cancel);
+        }
+        self.shared.set_voice_active(false);
+        self.shared.set_voice_key_held(false);
+        self.shared.set_voice_queued(None);
+    }
+
     /// 没在组句时看上下文有没有禁键盘（密码框）：禁了整键放行、不组句。组句中不看——那段组句是我们自己的，
     /// 应用要禁会先终止它。每键两次 compartment 读取，微秒级。
     fn keyboard_disabled(&self, pic: &Ref<ITfContext>) -> bool {
@@ -234,5 +374,86 @@ impl TextService_Impl {
             }
             (Next::Abort, _) => false,
         }
+    }
+}
+
+fn extended_key(lparam: LPARAM) -> bool {
+    ((lparam.0 as usize >> 24) & 1) != 0
+}
+
+fn key_down(vk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY) -> bool {
+    unsafe { GetKeyState(vk.0 as i32) < 0 }
+}
+
+fn is_voice_key_down(
+    trigger: VoiceTrigger,
+    vk: u32,
+    extended: bool,
+    right_alt_down: bool,
+    right_ctrl_down: bool,
+) -> bool {
+    if trigger.virtual_key() == Some(vk) {
+        return true;
+    }
+    match (trigger, vk) {
+        (VoiceTrigger::RightAlt, key) if key == VK_MENU.0 as u32 => extended || right_alt_down,
+        (VoiceTrigger::RightCtrl, key) if key == VK_CONTROL.0 as u32 => extended || right_ctrl_down,
+        _ => false,
+    }
+}
+
+fn toggle_voice_action(active: bool) -> VoiceAction {
+    if active {
+        VoiceAction::Stop
+    } else {
+        VoiceAction::Start
+    }
+}
+
+fn is_debounced(previous: Option<Instant>, now: Instant) -> bool {
+    previous.is_some_and(|value| now.saturating_duration_since(value) < VOICE_TOGGLE_DEBOUNCE)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generic_right_alt_uses_live_side_state_when_tsf_drops_extended_bit() {
+        assert!(is_voice_key_down(
+            VoiceTrigger::RightAlt,
+            VK_MENU.0 as u32,
+            false,
+            true,
+            false
+        ));
+    }
+
+    #[test]
+    fn generic_left_alt_does_not_trigger_voice() {
+        assert!(!is_voice_key_down(
+            VoiceTrigger::RightAlt,
+            VK_MENU.0 as u32,
+            false,
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn release_toggles_recording_without_requiring_a_key_down_callback() {
+        assert_eq!(toggle_voice_action(false), VoiceAction::Start);
+        assert_eq!(toggle_voice_action(true), VoiceAction::Stop);
+    }
+
+    #[test]
+    fn voice_toggle_ignores_only_the_short_debounce_window() {
+        let now = Instant::now();
+        assert!(is_debounced(
+            Some(now - VOICE_TOGGLE_DEBOUNCE + std::time::Duration::from_millis(1)),
+            now
+        ));
+        assert!(!is_debounced(Some(now - VOICE_TOGGLE_DEBOUNCE), now));
+        assert!(!is_debounced(None, now));
     }
 }

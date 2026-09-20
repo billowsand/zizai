@@ -2,12 +2,15 @@
 
 use qingjian_platform::protocol::{Frame, ScreenRect};
 
-use crate::dispatch::StatusView;
+use crate::dispatch::{StatusView, VoiceView};
 
 /// 交给 UI 线程执行的命令。`Frame` 较大，装箱免得枚举过胖。
 pub(super) enum UiCommand {
     /// 把候选窗口摆到组句矩形下方并按帧重绘。
     Show(Box<(Frame, ScreenRect)>),
+
+    /// 同一个窗口切成语音态。
+    ShowVoice(Box<(VoiceView, ScreenRect)>),
 
     /// 收起候选窗口。
     Hide,

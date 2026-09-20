@@ -2,7 +2,7 @@ use std::io::{Read, Write};
 
 use qingjian_platform::protocol::{
     ClientMessage, Frame, KeyEvent, PROTOCOL_VERSION, ScreenRect, ServerMessage, SessionId,
-    read_message, write_message,
+    VoiceAction, VoiceSync, read_message, write_message,
 };
 
 use super::KeyResponse;
@@ -124,13 +124,29 @@ impl<S: Read + Write> EngineClient<S> {
     }
 
     /// 问 Server 状态条上有没有点出待处理的目标模式（`Some(english)`）。
-    pub fn sync_mode(&mut self) -> Result<Option<bool>, ClientError> {
+    pub fn sync_mode(&mut self) -> Result<(Option<bool>, VoiceSync), ClientError> {
         match self.call(&ClientMessage::SyncMode {
             session: self.session,
         })? {
-            ServerMessage::ModeSync { english, .. } => Ok(english),
+            ServerMessage::ModeSync { english, voice, .. } => Ok((english, voice)),
             _ => Err(ClientError::Unexpected("expected mode sync")),
         }
+    }
+
+    /// 发送语音键的按下、松开或取消动作。不回话。
+    pub fn voice(&mut self, action: VoiceAction) -> Result<(), ClientError> {
+        self.send(&ClientMessage::Voice {
+            session: self.session,
+            action,
+        })
+    }
+
+    /// 文档已经成功写入这次听写结果。不回话。
+    pub fn voice_ack(&mut self, request: u64) -> Result<(), ClientError> {
+        self.send(&ClientMessage::VoiceAck {
+            session: self.session,
+            request,
+        })
     }
 
     /// 把当前会话的中英模式推给 Server（悬浮状态条）。不回话。

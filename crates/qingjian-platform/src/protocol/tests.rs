@@ -220,3 +220,16 @@ fn open_session_without_protocol_reads_zero() {
     assert_eq!(protocol, 0);
     assert_eq!(app, None);
 }
+
+/// 新 DLL 读旧 Server 的模式同步：没有语音字段时安全退到禁用。
+#[test]
+fn mode_sync_without_voice_is_disabled() {
+    let message: ServerMessage =
+        serde_json::from_str(r#"{"ModeSync":{"session":1,"english":null}}"#)
+            .expect("旧 Server 的模式同步");
+    let ServerMessage::ModeSync { voice, .. } = message else {
+        panic!("该是模式同步");
+    };
+    assert!(!voice.enabled);
+    assert_eq!(voice.state, super::VoiceState::Disabled);
+}

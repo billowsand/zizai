@@ -1,6 +1,6 @@
 ﻿; 青简 Windows 输入法安装脚本（Inno Setup）。
 ;
-; 装到 Program Files\Qingjian（64 位），把 TSF DLL（64 位与 32 位各一份，见 README「安装布局」）、Server、设置程序与随包数据装在一起，
+; 装到 Program Files\Qingjian（64 位），把 TSF DLL（64 位与 32 位各一份，见 README「安装布局」）、Server、语音 Worker、设置程序与随包数据装在一起，
 ; 然后：① 给安装目录加 ALL APPLICATION PACKAGES 读+执行权限（UWP/AppContainer 应用——任务栏搜索、
 ; 设置——才能加载 DLL）；② regsvr32 注册文本服务，64 位与 32 位各注册一次（图标落到 %ProgramData%\Qingjian）；
 ; ③ 在「启动」文件夹放 Server 快捷方式（登录时由 Explorer 走 ShellExecute 拉起，uiAccess 才生效——
@@ -11,7 +11,7 @@
 ; 升级：DLL 被加载进每个应用进程，文件锁着覆盖不了，所以 DLL 按版本起名（qingjian_tsf-<版本>.dll）并排装，
 ; 注册新的，旧的装完后删（删不掉的登记成重启后删）；已开着的应用继续用旧 DLL 直到重启，Server 两个版本都服务。
 ; Inno 的 CloseApplications 会用 Restart Manager 找出所有加载了 *.dll 的进程要求关闭——对输入法 DLL 就是关一切，故关掉；
-; 只有 Server / 设置程序两个 exe 要覆盖，安装前自己 taskkill。
+; Server / 语音 Worker / 设置程序要覆盖，安装前自己 taskkill。
 ;
 ; 版本号由打包脚本用 /DAppVersion=... 传入，缺省 0.1.0。用法见本目录 README.md。
 
@@ -44,7 +44,7 @@ AppVersion={#AppVersion}
 AppPublisher={#Publisher}
 AppSupportURL={#WebsiteUrl}
 VersionInfoVersion={#AppVersionNumeric}
-; SignPath 元数据校验要求安装包与三个 PE 的 ProductName 一致（ProductName 用 ASCII "Qingjian"：
+; SignPath 元数据校验要求安装包与各 PE 的 ProductName 一致（ProductName 用 ASCII "Qingjian"：
 ; winresource 生成的 .rc 对非 ASCII 不可靠，见 docs/design/code-signing.md）。
 ; ProductVersion 不在这里写：Inno 缺省取 AppVersion（完整版本串，含预发布后缀），与 PE 嵌的
 ; QINGJIAN_PRODUCT_VERSION 一致；显式写 VersionInfoProductVersion 会被 Inno 按数字版本校验拒掉。
@@ -80,6 +80,7 @@ Name: "chs"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 Source: "{#Repo}\target\release\qingjian_tsf.dll";      DestDir: "{app}"; DestName: "{#TsfDll}"; Flags: ignoreversion uninsrestartdelete
 Source: "{#Repo}\target\i686-pc-windows-msvc\release\qingjian_tsf.dll"; DestDir: "{app}"; DestName: "{#TsfDll32}"; Flags: ignoreversion uninsrestartdelete
 Source: "{#Repo}\target\release\qingjian-server.exe";   DestDir: "{app}"; Flags: ignoreversion
+Source: "{#Repo}\target\release\qingjian-voice-worker.exe"; DestDir: "{app}"; Flags: ignoreversion
 #ifdef WinUiSettings
 ; WinUI 3 那份设置程序（build.ps1 -WinUiSettings，只用于对比）：自带一份 Windows App Runtime
 ; （自包含部署：Windows 10 上机器装的框架包用不了，见 docs\notes\windows-win10.md）；
@@ -99,11 +100,17 @@ Source: "{#Repo}\data\generated\english.tsv";    DestDir: "{app}\data\generated"
 Source: "{#Repo}\data\generated\dicts\*.qj";     DestDir: "{app}\data\generated\dicts";  Flags: ignoreversion
 ; —— 本地整句模型（tools/release/pack-model.sh 打成的单文件 data\model\model.qjm；没有就不装，Server 不重排）——
 Source: "{#Repo}\data\model\model.qjm"; DestDir: "{app}\data\model"; Flags: ignoreversion skipifsourcedoesntexist
+; —— 本地测试包可显式携带 SenseVoice；正式包不传 VoiceModelDir，避免默认分发第三方模型 ——
+#ifdef VoiceModelDir
+Source: "{#VoiceModelDir}\model.int8.onnx"; DestDir: "{app}\data\voice\sense-voice"; Flags: ignoreversion
+Source: "{#VoiceModelDir}\tokens.txt"; DestDir: "{app}\data\voice\sense-voice"; Flags: ignoreversion
+#endif
 ; —— 随 git 的资源 ——
 Source: "{#Repo}\assets\emoji\emoji-zh.tsv";     DestDir: "{app}\assets\emoji";  Flags: ignoreversion
 Source: "{#Repo}\assets\emoji\emoji-en.tsv";     DestDir: "{app}\assets\emoji";  Flags: ignoreversion
 Source: "{#Repo}\assets\fuma\xiaohe.txt";        DestDir: "{app}\assets\fuma";  Flags: ignoreversion
 Source: "{#Repo}\assets\sample\dict.tsv";        DestDir: "{app}\assets\sample"; Flags: ignoreversion
+Source: "{#Repo}\THIRD_PARTY_NOTICES.md";         DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\字在设置"; Filename: "{app}\qingjian-settings.exe"; IconFilename: "{app}\qingjian.ico"
@@ -130,11 +137,13 @@ Filename: "{syswow64}\regsvr32.exe"; Parameters: "/s ""{app}\{#TsfDll32}"""; \
 ;    CreateProcess / runasoriginaluser 拉起（报 740），必须走 ShellExecute（等同双击）。
 
 [UninstallRun]
-; 反向：先删登录任务、杀 Server / 设置程序、反注册 DLL，Inno 再删文件（DLL 若仍被占用，重启后删）。
+; 反向：先删登录任务、杀 Server / 语音 Worker / 设置程序、反注册 DLL，Inno 再删文件（DLL 若仍被占用，重启后删）。
 Filename: "{sys}\schtasks.exe"; Parameters: "/delete /tn ""Qingjian Server"" /f"; \
   Flags: runhidden; RunOnceId: "DelLogonTask"
 Filename: "{sys}\taskkill.exe"; Parameters: "/im qingjian-server.exe /f"; \
   Flags: runhidden; RunOnceId: "KillServer"
+Filename: "{sys}\taskkill.exe"; Parameters: "/im qingjian-voice-worker.exe /f"; \
+  Flags: runhidden; RunOnceId: "KillVoiceWorker"
 Filename: "{sys}\taskkill.exe"; Parameters: "/im qingjian-settings.exe /f"; \
   Flags: runhidden; RunOnceId: "KillSettings"
 Filename: "{sys}\regsvr32.exe"; Parameters: "/u /s ""{app}\{#TsfDll}"""; \
@@ -192,11 +201,12 @@ begin
   end;
 end;
 
-{ 覆盖前先结束 Server 与设置程序（只有这两个 exe 要覆盖；DLL 按版本并排装，不用关应用）。
+{ 覆盖前先结束 Server、语音 Worker 与设置程序（DLL 按版本并排装，不用关应用）。
   没在跑时 taskkill 返回非 0，忽略。 }
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   KillProcess('qingjian-server.exe');
+  KillProcess('qingjian-voice-worker.exe');
   KillProcess('qingjian-settings.exe');
   RetireLoadedDll('{#TsfDll}');
   RetireLoadedDll('{#TsfDll32}');

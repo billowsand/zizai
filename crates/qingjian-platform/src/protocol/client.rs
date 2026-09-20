@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use super::key::KeyEvent;
 use super::screen_rect::ScreenRect;
 use super::session::SessionId;
+use super::voice::VoiceAction;
 
 /// DLL（客户端，每个应用进程里一个）发给 Server 的消息。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +119,24 @@ pub enum ClientMessage {
     SyncMode {
         /// 会话标识。
         session: SessionId,
+    },
+
+    /// 语音键按下 / 松开或焦点变化；不等回话，状态与结果经 [`Self::SyncMode`] 拉取。
+    Voice {
+        /// 发起动作的 TSF 会话。
+        session: SessionId,
+
+        /// 按下、松开或取消。
+        action: VoiceAction,
+    },
+
+    /// TSF 编辑会话已经成功写入一次语音结果，Server 可以清掉待交付文本。
+    VoiceAck {
+        /// 收到结果的会话。
+        session: SessionId,
+
+        /// 已写入的听写请求编号。
+        request: u64,
     },
 
     /// 宿主线程把输入法切成了别的（微软拼音等）：Server 收起悬浮状态条。应用退出时不发（那时状态条该留着），

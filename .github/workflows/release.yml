@@ -88,7 +88,7 @@ jobs:
           else
             echo "QINGJIAN_UIACCESS=0" >> "$GITHUB_ENV"
           fi
-          # SignPath 元数据校验要求同一次构建里所有产物的 ProductVersion 一致：三个 PE 都嵌这个版本
+          # SignPath 元数据校验要求同一次构建里所有产物的 ProductVersion 一致：所有 PE 都嵌这个版本
           # （各 crate 的 build.rs 读它，缺省回落 crate 版本）。
           echo "QINGJIAN_PRODUCT_VERSION=$VERSION" >> "$GITHUB_ENV"
 
@@ -111,7 +111,7 @@ jobs:
         # -NoPackage：只构建。签回后再 -PackageOnly -PreSigned 打包，已签文件被 Inno 原样拷进安装包。
         run: powershell -NoProfile -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1 -NoPackage
 
-      # —— SignPath 签名第一段：四个 PE（TSF DLL 64/32 位、Server、设置程序）——
+      # —— SignPath 签名第一段：TSF DLL 64/32 位、Server、语音 Worker、设置程序 ——
       # 关键的就是 TSF DLL：没签名的 DLL 在 UWP / 系统应用（任务栏搜索、「设置」）里被禁，签过才加载得进去。
       - name: Stage unsigned binaries
         if: steps.secrets.outputs.signpath == 'true'
@@ -122,6 +122,7 @@ jobs:
           Copy-Item target\release\qingjian_tsf.dll signpath-input\qingjian_tsf.dll
           Copy-Item target\i686-pc-windows-msvc\release\qingjian_tsf.dll signpath-input\qingjian_tsf-x86.dll
           Copy-Item target\release\qingjian-server.exe signpath-input\qingjian-server.exe
+          Copy-Item target\release\qingjian-voice-worker.exe signpath-input\qingjian-voice-worker.exe
           Copy-Item target\release\qingjian-settings-egui.exe signpath-input\qingjian-settings-egui.exe
 
       - name: Upload unsigned binaries
@@ -164,6 +165,7 @@ jobs:
           Copy-Item (Join-Path $src 'qingjian_tsf.dll') target\release\qingjian_tsf.dll
           Copy-Item (Join-Path $src 'qingjian_tsf-x86.dll') target\i686-pc-windows-msvc\release\qingjian_tsf.dll
           Copy-Item (Join-Path $src 'qingjian-server.exe') target\release\qingjian-server.exe
+          Copy-Item (Join-Path $src 'qingjian-voice-worker.exe') target\release\qingjian-voice-worker.exe
           Copy-Item (Join-Path $src 'qingjian-settings-egui.exe') target\release\qingjian-settings-egui.exe
 
       # 与开发机同版本（7.1.0，自带简体中文翻译；Chocolatey 只有 6.x，6 的安装包不带简中）。钉死 GitHub Release 上的文件。

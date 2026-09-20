@@ -7,6 +7,7 @@ mod item;
 mod rendered;
 mod status;
 mod top_line;
+mod voice;
 
 use crate::canvas::Canvas;
 use crate::cloud::draw_cloud;

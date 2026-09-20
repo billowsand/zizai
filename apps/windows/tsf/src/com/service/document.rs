@@ -36,11 +36,13 @@ impl TextService_Impl {
         }
         self.shared.end_composing();
         let Some(context) = self.shared.last_context() else {
-            log(&format!("失焦上屏没有上下文，丢弃: {text:?}"));
+            let chars = text.as_deref().map_or(0, |value| value.chars().count());
+            log(&format!("失焦上屏没有上下文，丢弃 {chars} 字"));
             self.shared.reset();
             return;
         };
-        log(&format!("失焦上屏: {text:?}"));
+        let chars = text.as_deref().map_or(0, |value| value.chars().count());
+        log(&format!("失焦上屏 {chars} 字"));
         let requested = request_update(
             &context,
             self.client_id.get(),
@@ -71,8 +73,10 @@ impl TextService_Impl {
             return;
         }
         let Ok(context) = pic.ok() else {
+            let commit_chars = commit.as_deref().map_or(0, |value| value.chars().count());
+            let preedit_chars = preedit.chars().count();
             log(&format!(
-                "无上下文，丢弃更新: commit={commit:?} preedit={preedit:?}"
+                "无上下文，丢弃更新: commit={commit_chars} 字 preedit={preedit_chars} 字"
             ));
             return;
         };

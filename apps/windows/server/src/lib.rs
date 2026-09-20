@@ -7,7 +7,9 @@ pub mod ipc;
 /// 候选窗口 / 状态条的自绘线程；仅 Windows。
 #[cfg(windows)]
 pub mod ui;
+pub mod voice;
 
 pub use assembly::{AssemblySpec, LanguageModelFiles};
 pub use dispatch::{Router, RouterConfig};
 pub use error::ServerError;
+pub use voice::ProcessVoiceBackend;

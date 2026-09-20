@@ -1,8 +1,8 @@
-//! 「通用」页：输入方案、按键、标点、候选质量，一张卡九行。
+//! 「通用」页：输入方案、按键、标点、候选质量与语音输入。
 //! 分节在左侧导航里，这里不再套「输入方案 / 按键 / 标点」的小节标题。
 
 use eframe::egui;
-use qingjian_platform::Modifiers;
+use qingjian_platform::{Modifiers, VoiceTrigger};
 
 use crate::app::Settings;
 use crate::widgets::{CONTROL_WIDTH, LABEL_SIZE, list, page, toggle};
@@ -34,6 +34,15 @@ const MODIFIERS: [(&str, &str); 6] = [
     ("Ctrl + Shift", "shift+ctrl"),
     ("Ctrl + Alt", "ctrl+alt"),
     ("Alt + Shift", "shift+alt"),
+];
+
+/// 按一下开始、再按一下结束的单键预设。
+const VOICE_KEYS: [(&str, &str); 5] = [
+    ("右 Alt", "right_alt"),
+    ("右 Ctrl", "right_ctrl"),
+    ("Caps Lock", "caps_lock"),
+    ("Scroll Lock", "scroll_lock"),
+    ("关闭快捷键", "off"),
 ];
 
 pub(crate) fn view(settings: &mut Settings, ui: &mut egui::Ui) {
@@ -132,6 +141,42 @@ pub(crate) fn view(settings: &mut Settings, ui: &mut egui::Ui) {
                         settings.save("model", "enabled", model);
                     }
                     response
+                },
+            );
+            let mut voice = settings.config.voice.enabled;
+            list.row(
+                "\u{E720}",
+                "本地语音输入",
+                "按一下快捷键开始说话，再按一下后离线识别并直接写入当前输入框。首次使用需按文档放置 SenseVoice 模型。",
+                |ui| {
+                    let response = toggle(ui, &mut voice, "本地语音输入");
+                    if response.changed() {
+                        settings.save("voice", "enabled", voice);
+                    }
+                    response
+                },
+            );
+            let current_voice_key = settings.config.shortcut.voice;
+            list.row(
+                "\u{E765}",
+                "语音快捷键",
+                "按一下开始录音，再按一下开始识别；密码框中不会拦截。",
+                |ui| {
+                    ui.add_enabled_ui(voice, |ui| {
+                        let selected = match current_voice_key {
+                            VoiceTrigger::RightAlt => 0,
+                            VoiceTrigger::RightCtrl => 1,
+                            VoiceTrigger::CapsLock => 2,
+                            VoiceTrigger::ScrollLock => 3,
+                            VoiceTrigger::Off => 4,
+                        };
+                        let (response, picked) = show_combo(ui, "voice-key", &VOICE_KEYS, selected);
+                        if let Some(value) = picked {
+                            settings.save("shortcut", "voice", value);
+                        }
+                        response
+                    })
+                    .inner
                 },
             );
             let mut chinese_first = settings.config.general.chinese_first;

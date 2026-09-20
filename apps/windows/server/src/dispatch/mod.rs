@@ -22,7 +22,7 @@ use qingjian_core::{Engine, FumaTable};
 use qingjian_platform::LocalModelConfig;
 use qingjian_platform::protocol::{ClientMessage, Frame, ScreenRect, ServerMessage, SessionId};
 
-pub use self::candidates::{CandidateSink, NoopSink};
+pub use self::candidates::{CandidateSink, NoopSink, VoiceView};
 use self::composed::Composed;
 pub use self::config::RouterConfig;
 use self::reload::ConfigReload;
@@ -31,6 +31,8 @@ pub use self::rescore::find_model;
 use self::rescore::{ModelLoader, RescoreState};
 use self::session::SessionInfo;
 pub use self::status::{NoopStatusSink, StatusEvent, StatusSink, StatusView};
+use crate::voice::{VoiceBackend, VoiceCoordinator};
+use qingjian_platform::VoiceTrigger;
 
 /// 学习数据落盘间隔（与 macOS 壳一致）；Server 没有定时器，借消息节拍看时间。
 const LEARNING_FLUSH_INTERVAL: Duration = Duration::from_secs(60);
@@ -90,6 +92,14 @@ pub struct Router {
     /// 上次真正显示的帧与位置：没变就不重画（组字期间的空转 Poll 很多）。
     last_shown: Option<(Frame, ScreenRect)>,
 
+    /// 同一个候选窗口当前是否处在语音态。
+    voice_visible: bool,
+
+    /// 错误 / 空录音提示只展示一次，约两秒后由低频 `SyncMode` 收起。
+    voice_notice_until: Option<Instant>,
+
+    voice_notice_seen: bool,
+
     /// 本地整句模型（`.qjm` 或三件套目录）；没有模型文件为 `None`。
     model_path: Option<PathBuf>,
 
@@ -101,6 +111,9 @@ pub struct Router {
 
     /// 重排的防抖 / 轮询进行态。
     rescore: RescoreState,
+
+    /// 独立语音 Worker 的会话绑定与可靠交付状态。
+    voice: VoiceCoordinator,
 }
 
 impl Router {
@@ -126,11 +139,25 @@ impl Router {
             pending_mode: None,
             last_rect: None,
             last_shown: None,
+            voice_visible: false,
+            voice_notice_until: None,
+            voice_notice_seen: false,
             model_path: None,
             model_loader: None,
             applied_model: LocalModelConfig::default(),
             rescore: RescoreState::default(),
+            voice: VoiceCoordinator::default(),
         }
+    }
+
+    /// 启用语音输入；Worker 后端由进程入口装配，测试可注入替身。
+    pub fn configure_voice(&mut self, trigger: VoiceTrigger, backend: Box<dyn VoiceBackend>) {
+        self.voice.configure(trigger, backend);
+    }
+
+    /// 语音已配置但 Worker 无法启动；仍下发失败状态，便于前端给出反馈。
+    pub fn configure_voice_failure(&mut self, trigger: VoiceTrigger, message: String) {
+        self.voice.configure_failure(trigger, message);
     }
 
     pub fn set_candidate_sink(&mut self, sink: Box<dyn CandidateSink>) {

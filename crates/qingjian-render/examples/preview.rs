@@ -8,7 +8,7 @@ use std::time::Instant;
 use clap::Parser;
 use qingjian_render::{
     FontLibrary, Frame, Preedit, PreeditSegment, PreeditStyle, Renderer, Row, Shadow, StatusCell,
-    Theme, Tone,
+    Theme, Tone, VoiceFrame,
 };
 
 #[derive(Parser)]
@@ -136,6 +136,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 path.display()
             );
         }
+        let voice = VoiceFrame {
+            levels: vec![
+                80, 180, 430, 780, 540, 260, 620, 920, 710, 350, 160, 480, 760, 390,
+            ],
+            title: "正在听".to_owned(),
+            transcript: Some("我们把语音输入融入现有候选窗口".to_owned()),
+            hint: "再次按快捷键完成".to_owned(),
+        };
+        let rendered = renderer.render_voice(&voice, &theme, args.scale, shadow.as_ref())?;
+        let path = args.out.join(format!("voice-{theme_name}.png"));
+        rendered.pixmap.save_png(&path)?;
+        let (w, h) = rendered.content_size_points();
+        println!(
+            "{:<28} {:>4.0}×{:<4.0}pt  {}",
+            format!("voice-{theme_name}"),
+            w,
+            h,
+            path.display()
+        );
     }
 
     for probe in [

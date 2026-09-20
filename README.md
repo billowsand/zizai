@@ -170,6 +170,8 @@ flowchart LR
     Server --> Core[Rust 输入 Core]
     Core --> Local[(本地词库 / 模型 / 学习数据)]
     Server --> UI[候选窗 / 状态条]
+    Server -. 启用语音时 .-> Voice[本地语音 Worker]
+    Voice --> Speech[(SenseVoice 模型 / 麦克风)]
 ```
 
 平台壳只接收 Windows 输入事件并展示结果；拼音、候选、排序和学习都留在 Core。更多设计见 [架构文档](./docs/design/architecture.md)。

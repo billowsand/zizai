@@ -1,0 +1,21 @@
+[package]
+name = "qingjian-voice"
+description = "Windows 本地语音识别 Worker：采音、重采样与 SenseVoice 推理"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+qingjian-platform.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+cpal = "0.15"
+rubato = "0.15"
+sherpa-onnx = { version = "1", default-features = false }
+
+[lints]
+workspace = true

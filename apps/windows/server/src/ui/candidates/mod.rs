@@ -17,13 +17,16 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, Result, w};
 
-use qingjian_platform::protocol::Frame;
+use qingjian_platform::ColorScheme;
+use qingjian_platform::protocol::{Frame, VoiceState};
+use qingjian_render::VoiceFrame;
 
 use self::placement::{LastPlacement, place};
 pub(crate) use self::render_data::RenderData;
 use super::layered;
 use super::painter::SharedPainter;
 use super::window_class::WindowClass;
+use crate::dispatch::VoiceView;
 
 const CLASS_NAME: PCWSTR = w!("QingjianCandidateWindow");
 static CLASS: WindowClass = WindowClass::new();
@@ -42,6 +45,9 @@ pub(crate) struct CandidateWindow {
 
     /// 绘制内容。
     data: RefCell<RenderData>,
+
+    /// `Some` 时同一个 HWND 画语音态；普通候选帧到来即清掉。
+    voice: RefCell<Option<VoiceRenderData>>,
 
     /// 上次用的 DPI。
     dpi: Cell<u32>,
@@ -89,6 +95,7 @@ impl CandidateWindow {
         Ok(Self {
             hwnd,
             data,
+            voice: RefCell::new(None),
             dpi: Cell::new(dpi),
             dark: Cell::new(dark),
             placement: Cell::new(None),
@@ -98,13 +105,65 @@ impl CandidateWindow {
 
     /// 刷新内容（不定位、不显示）。
     pub(crate) fn set_content(&self, frame: &Frame) {
+        *self.voice.borrow_mut() = None;
         self.data.borrow_mut().set(frame);
+    }
+
+    /// 保留最近一小段电平历史，形成从左向右滚动的波形。
+    pub(crate) fn set_voice(&self, view: VoiceView) {
+        let mut voice = self.voice.borrow_mut();
+        let reset = voice
+            .as_ref()
+            .is_none_or(|previous| previous.state != VoiceState::Recording)
+            && view.state == VoiceState::Recording;
+        let levels = if reset {
+            Vec::new()
+        } else {
+            voice
+                .as_ref()
+                .map(|previous| previous.frame.levels.clone())
+                .unwrap_or_default()
+        };
+        let mut levels = levels;
+        levels.push(if view.state == VoiceState::Recording {
+            view.level
+        } else {
+            0
+        });
+        if levels.len() > 24 {
+            levels.drain(..levels.len() - 24);
+        }
+        let (title, hint) = match view.state {
+            VoiceState::Recording => ("正在听", "再次按快捷键完成 · Esc 取消"),
+            VoiceState::Recognizing => ("正在识别", "正在整理转写…"),
+            VoiceState::Ready => ("即将上屏", "识别完成"),
+            VoiceState::Failed => ("语音暂不可用", "可再次按快捷键重试"),
+            VoiceState::Idle => ("没有听清", "请靠近麦克风再试一次"),
+            _ => ("语音输入", "请稍候"),
+        };
+        *voice = Some(VoiceRenderData {
+            state: view.state,
+            color_scheme: view.color_scheme,
+            frame: VoiceFrame {
+                levels,
+                title: title.to_owned(),
+                transcript: view.text,
+                hint: hint.to_owned(),
+            },
+        });
     }
 
     /// 按光标矩形定位并显示：贴光标下方（放不下放上方，同一行里不改边），四周留出阴影。
     pub(crate) fn show(&self, anchor: RECT) {
         self.sync_environment();
-        let rendered = {
+        let rendered = if let Some(voice) = self.voice.borrow().as_ref() {
+            self.painter.borrow_mut().render_voice(
+                &voice.frame,
+                voice.color_scheme,
+                self.dark.get(),
+                self.dpi.get(),
+            )
+        } else {
             let data = self.data.borrow();
             self.painter.borrow_mut().render_frame(
                 &data.render_frame(),
@@ -156,6 +215,14 @@ impl CandidateWindow {
         self.dpi.set(dpi);
         self.dark.set(dark);
     }
+}
+
+struct VoiceRenderData {
+    state: VoiceState,
+
+    color_scheme: ColorScheme,
+
+    frame: VoiceFrame,
 }
 
 impl Drop for CandidateWindow {

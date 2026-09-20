@@ -10,7 +10,8 @@ members = [
     "crates/qingjian-format",
     "crates/qingjian-neural",
     "crates/qingjian-render",
-    "apps/cli", "apps/windows/server", "apps/windows/tsf", "apps/windows/settings", "apps/windows/settings-egui", "tools/dict-convert", "tools/gloss-gen",
+    "crates/qingjian-voice",
+    "apps/cli", "apps/windows/server", "apps/windows/tsf", "apps/windows/voice-worker", "apps/windows/settings", "apps/windows/settings-egui", "tools/dict-convert", "tools/gloss-gen",
 ]
 
 [workspace.package]
@@ -33,6 +34,7 @@ qingjian-lm = { path = "crates/qingjian-lm" }
 qingjian-format = { path = "crates/qingjian-format" }
 qingjian-neural = { path = "crates/qingjian-neural" }
 qingjian-render = { path = "crates/qingjian-render" }
+qingjian-voice = { path = "crates/qingjian-voice" }
 
 # 外部依赖统一在这里定版本，子 crate 一律 `xxx.workspace = true`
 serde = { version = "1.0.229", features = ["derive"] }

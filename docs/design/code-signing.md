@@ -26,7 +26,7 @@
 
 ```
 推 windows-v* 标签
-  → CI 构建四个 PE（TSF DLL x64/x86、Server、设置程序）
+  → CI 构建五个 PE（TSF DLL x64/x86、Server、语音 Worker、设置程序）
   → 上传为 GitHub artifact → SignPath 签名请求 ①（二进制）
   → 审批人在 SignPath 面板点批准（基金会条款：每次发布都人工批）
   → 签回、覆盖回 target\ → Inno 打包（已签文件原样进包）
@@ -72,7 +72,7 @@ Projects → 本项目 → Artifact Configurations → Add → Custom，XML 如�
 `product-name` / `product-version` 是对 PE 里 VERSIONINFO 的**强制校验**，与 `qingjian.iss`
 的 `VersionInfoProductName/ProductVersion` 和各 crate `build.rs` 嵌的值对应——改了版本元数据约定要同步改这里。
 
-**binaries**（四个 PE 打成 zip 提交，zip 根元素）：
+**binaries**（五个 PE 打成 zip 提交，zip 根元素）：
 
 ```xml
 <artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
@@ -87,6 +87,9 @@ Projects → 本项目 → Artifact Configurations → Add → Custom，XML 如�
       <authenticode-sign />
     </pe-file>
     <pe-file path="qingjian-server.exe" product-name="Qingjian" product-version="${version}">
+      <authenticode-sign />
+    </pe-file>
+    <pe-file path="qingjian-voice-worker.exe" product-name="Qingjian" product-version="${version}">
       <authenticode-sign />
     </pe-file>
     <pe-file path="qingjian-settings-egui.exe" product-name="Qingjian" product-version="${version}">
@@ -170,7 +173,7 @@ specifically requested by the user or the person installing or operating it.
 
 | 现象 | 原因与处理 |
 |---|---|
-| 签名请求报 product-name/version 不符 | 三个 PE 或安装包的 VERSIONINFO 与 artifact configuration 不一致。本机用 `Get-AuthenticodeSignature` 只能看签名；看元数据用资源管理器属性→详细信息，或 `(Get-Item x.exe).VersionInfo.ProductName`。先查 CI 是否真把 `QINGJIAN_PRODUCT_VERSION` 传进了 cargo |
+| 签名请求报 product-name/version 不符 | 某个 PE 或安装包的 VERSIONINFO 与 artifact configuration 不一致。本机用 `Get-AuthenticodeSignature` 只能看签名；看元数据用资源管理器属性→详细信息，或 `(Get-Item x.exe).VersionInfo.ProductName`。先查 CI 是否真把 `QINGJIAN_PRODUCT_VERSION` 传进了 cargo |
 | 请求报文件找不到 | `Stage unsigned binaries` 的文件名与 artifact configuration 的 `path` 对不上（改名要两边同步） |
 | 请求被拒：origin verification failed | 构建 job 必须全在 GitHub-hosted runner（我们是 `windows-latest` ✅）；workflow 改动后确认没引入 self-hosted job |
 | action 等超时失败 | 没人批准。去面板批，然后重跑失败的 job（release job 从头跑，有 rust-cache 与重下数据，约十分钟） |

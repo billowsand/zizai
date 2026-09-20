@@ -18,6 +18,7 @@ mod renderer;
 mod shadow;
 mod text;
 mod theme;
+mod voice;
 
 pub use color::Color;
 pub use error::RenderError;
@@ -29,6 +30,7 @@ pub use frame::{Frame, Preedit, PreeditSegment, PreeditStyle, Row, Tone};
 pub use renderer::{Rendered, RenderedStatus, Renderer, StatusCell, shuangpin_mark};
 pub use shadow::Shadow;
 pub use theme::{FontSpec, Palette, Theme};
+pub use voice::VoiceFrame;
 
 /// 让 `tiny_skia::Pixmap` 的使用方不用再单独依赖 tiny-skia。
 pub use tiny_skia::Pixmap;

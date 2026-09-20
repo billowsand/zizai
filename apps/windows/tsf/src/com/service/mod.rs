@@ -9,6 +9,7 @@ mod key_sink;
 mod mode;
 mod next;
 mod processor;
+mod voice;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -26,6 +27,7 @@ use super::mode::ModeState;
 use super::poll::PollTimer;
 use crate::client::EngineClient;
 use crate::client::pipe::PipeStream;
+use qingjian_platform::protocol::VoiceSync;
 
 /// 连 Server 的会话客户端，与编辑会话 / 轮询定时器共享（STA 单线程）。连不上时为 `None`，键照样放行。
 pub(crate) type SharedClient = Rc<RefCell<Option<EngineClient<PipeStream>>>>;
@@ -70,6 +72,9 @@ pub struct TextService {
 
     /// 上次拉起 Server 的时间，按 [`LAUNCH_INTERVAL`] 节流。
     last_launch: Cell<Option<Instant>>,
+
+    /// 上次接受的语音开关键松开时刻；过滤键盘抖动和过快的重复触发。
+    last_voice_toggle: Cell<Option<Instant>>,
 
     /// 中 / 英模式（单击 Shift 翻转），与语言栏按钮共用。
     mode_state: Rc<ModeState>,
@@ -118,6 +123,11 @@ pub(super) fn on_mode_sync(english: bool) {
     });
 }
 
+/// 轮询取到语音状态：刷新触发键，并在有最终文本时申请一次直接写入。
+pub(super) fn on_voice_sync(sync: VoiceSync) {
+    with_active(|service| service.apply_voice_sync(sync));
+}
+
 impl TextService {
     #[allow(clippy::new_without_default)] // 有 lock_module 副作用
     pub fn new() -> Self {
@@ -131,6 +141,7 @@ impl TextService {
             poll_timer: RefCell::new(None),
             last_connect_failure: Cell::new(None),
             last_launch: Cell::new(None),
+            last_voice_toggle: Cell::new(None),
             mode_state: ModeState::new(),
             mode_button: RefCell::new(None),
             conversion_sink: RefCell::new(None),

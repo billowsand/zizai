@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::time::{Instant, SystemTime};
 
-use qingjian_platform::DictionariesConfig;
+use qingjian_platform::{DictionariesConfig, VoiceConfig, VoiceTrigger};
 
 /// 热加载状态。
 pub(crate) struct ConfigReload {
@@ -27,4 +27,12 @@ pub(crate) struct ConfigReload {
 
     /// 已应用的 `[dictionaries]`。
     pub(super) applied_dictionaries: DictionariesConfig,
+
+    /// 上次应用的语音模型配置与快捷键；任一变化时重启 Worker。
+    pub(super) applied_voice: VoiceConfig,
+
+    pub(super) applied_voice_trigger: VoiceTrigger,
+
+    /// 与 Server 同目录的语音 Worker。
+    pub(super) voice_worker: Option<PathBuf>,
 }

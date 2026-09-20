@@ -3,7 +3,7 @@
 字在 Windows 输入法的 **TSF 文本服务 DLL**（产物 `qingjian_tsf.dll`）。Windows 会把它加载进每一个接受
 文本输入的应用进程；它只做适配，不含任何输入逻辑——把系统按键翻成协议消息发给独立的
 `qingjian-server` 进程（`../server`），再把 Server 回的候选画出来。
-Windows 端的整体结构、为什么是两个 package、构建与注册步骤，见 `../README.md`。
+Windows 端的整体结构、为什么拆成多个 package、构建与注册步骤，见 `../README.md`。
 
 ## 两层
 

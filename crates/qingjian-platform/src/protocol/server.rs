@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use super::frame::Frame;
 use super::key::KeyOutcome;
 use super::session::SessionId;
+use super::voice::VoiceSync;
 
 /// Server 发给 DLL 的消息。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,6 +49,10 @@ pub enum ServerMessage {
 
         /// `Some(true)` 切英文、`Some(false)` 切中文；`None` 没有待处理的切换。
         english: Option<bool>,
+
+        /// 语音输入状态；老 Server 没这个字段时退到禁用。
+        #[serde(default)]
+        voice: VoiceSync,
     },
 
     /// 收到「翻译选中文字」快捷键：请 DLL 在读编辑会话里取当前选区，用

@@ -3,6 +3,7 @@ use std::rc::Rc;
 
 use windows::Win32::UI::TextServices::{ITfComposition, ITfContext};
 
+use qingjian_platform::VoiceTrigger;
 use qingjian_platform::protocol::ScreenRect;
 
 use crate::com::service::SharedClient;
@@ -30,6 +31,22 @@ pub(crate) struct Shared {
     /// 本线程当前有键盘焦点（`OnSetFocus`）；轮询定时器只在前台时问状态条的切模式请求。
     foreground: Cell<bool>,
 
+    /// Server 下发的语音触发键；连接后由低频同步刷新。
+    voice_trigger: Cell<VoiceTrigger>,
+
+    /// 录音、识别或等待结果确认中；为真时每个定时器节拍都同步。
+    voice_active: Cell<bool>,
+
+    /// 本次语音触发键已经在 `OnKeyDown` 命中。右 Alt / Ctrl 松开时 Windows 可能只给通用键码，
+    /// 且按键状态已经清掉；单独记住按下，才能稳定吃掉对应 KeyUp 并发送 Stop。
+    voice_key_held: Cell<bool>,
+
+    /// 已申请编辑会话、尚未完成写入的听写请求，防止重复申请。
+    voice_queued: Cell<Option<u64>>,
+
+    /// 已经写入文档但 ACK 尚未送达的请求；重连后只重发 ACK，不重复插字。
+    voice_committed: Cell<Option<u64>>,
+
     /// 与 `TextService` 共用的引擎客户端；DLL 侧结束组句时要通知 Server 收候选窗口（它无从知晓）。
     client: SharedClient,
 }
@@ -44,6 +61,11 @@ impl Shared {
             last_anchor: Cell::new(None),
             server_stale: Cell::new(false),
             foreground: Cell::new(false),
+            voice_trigger: Cell::new(VoiceTrigger::Off),
+            voice_active: Cell::new(false),
+            voice_key_held: Cell::new(false),
+            voice_queued: Cell::new(None),
+            voice_committed: Cell::new(None),
             client,
         })
     }
@@ -56,6 +78,46 @@ impl Shared {
         self.foreground.set(value);
     }
 
+    pub(crate) fn voice_trigger(&self) -> VoiceTrigger {
+        self.voice_trigger.get()
+    }
+
+    pub(crate) fn set_voice_trigger(&self, value: VoiceTrigger) {
+        self.voice_trigger.set(value);
+    }
+
+    pub(crate) fn voice_active(&self) -> bool {
+        self.voice_active.get()
+    }
+
+    pub(crate) fn set_voice_active(&self, value: bool) {
+        self.voice_active.set(value);
+    }
+
+    pub(crate) fn voice_key_held(&self) -> bool {
+        self.voice_key_held.get()
+    }
+
+    pub(crate) fn set_voice_key_held(&self, value: bool) {
+        self.voice_key_held.set(value);
+    }
+
+    pub(crate) fn voice_queued(&self) -> Option<u64> {
+        self.voice_queued.get()
+    }
+
+    pub(crate) fn set_voice_queued(&self, value: Option<u64>) {
+        self.voice_queued.set(value);
+    }
+
+    pub(crate) fn voice_committed(&self) -> Option<u64> {
+        self.voice_committed.get()
+    }
+
+    pub(crate) fn set_voice_committed(&self, value: Option<u64>) {
+        self.voice_committed.set(value);
+    }
+
     pub(crate) fn last_context(&self) -> Option<ITfContext> {
         self.last_context.borrow().clone()
     }
@@ -64,11 +126,11 @@ impl Shared {
         *self.last_context.borrow_mut() = context;
     }
 
-    pub(super) fn last_anchor(&self) -> Option<ScreenRect> {
+    pub(crate) fn last_anchor(&self) -> Option<ScreenRect> {
         self.last_anchor.get()
     }
 
-    pub(super) fn set_last_anchor(&self, rect: ScreenRect) {
+    pub(crate) fn set_last_anchor(&self, rect: ScreenRect) {
         self.last_anchor.set(Some(rect));
     }
 
@@ -140,6 +202,10 @@ impl Shared {
         self.set_composition(None);
         self.set_last_context(None);
         self.end_composing();
+        self.voice_active.set(false);
+        self.voice_key_held.set(false);
+        self.voice_queued.set(None);
+        self.voice_committed.set(None);
     }
 
     /// 组句被应用强行终止：本地清掉，并记下 Server 的缓冲还没清。
