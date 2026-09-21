@@ -61,9 +61,16 @@ Worker 与 Server 分进程，原因是模型体积大，且音频 / ONNX 原生
 一次听写有单调递增的 `request_id`，状态为：
 
 ```text
-Disabled / Loading / Idle → Recording → Recognizing → Ready
+Disabled / Loading / Idle → Recording → Recognizing → (Polishing) → Ready
                                       ↘ Failed
 ```
+
+`Recording` / `Recognizing` / `Polishing` / `Ready` 是「进行中」的四个阶段，三处判定必须一起改：
+Server 的 `VoiceCoordinator::is_active`（挡住通用收窗）、下发给 DLL 的 `VoiceSync::is_active`（80 ms 同步与 Esc 取消）、
+候选窗的 `reconcile_voice`（这一帧画什么）。漏一个阶段就是「界面停在上一阶段、Esc 失灵、再按一次被当成新开始」。
+
+每个会停住的阶段都有墙钟保险：识别 45 秒、润色 20 秒、`Ready` 等 ACK 10 秒。到点取消 Worker 请求、回到
+`Failed` 并给短提示——`Ready` 卡住尤其要兜，它会一直占着候选窗口。
 
 - `VoiceStart` 把请求绑定到当前 `SessionId`；同一时刻全局只有一次录音。
 - `VoiceStop` 只结束同一请求；重复按键和系统自动重复不新建请求。

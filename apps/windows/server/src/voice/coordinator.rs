@@ -13,6 +13,11 @@ const RECOGNITION_TIMEOUT: Duration = Duration::from_secs(45);
 /// 润色档位开时的大模型墙钟保险；Worker 自己 15 秒超时退原文，这层只为兜住死进程。
 const POLISH_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// 交付等 ACK 的上限。正常情况下 DLL 下一拍（80 ms）就排编辑会话并回 ACK；
+/// 拿不到文档上下文、编辑会话一直不被受理时，`Ready` 会永久占住候选窗并挡住快捷键，
+/// 所以到点放弃这一条交付。
+const DELIVERY_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Server 内唯一的语音输入协调器。
 pub struct VoiceCoordinator {
     enabled: bool,
@@ -176,7 +181,8 @@ impl VoiceCoordinator {
     fn start(&mut self, session: SessionId) {
         if self.backend.is_none() {
             self.session = Some(session);
-            self.state = VoiceState::Failed;
+            // 保留 configure_failure 留下的原因；直接赋值会漏掉 state_since 与状态日志。
+            self.set_state(VoiceState::Failed);
             return;
         }
         if self.session == Some(session)
@@ -237,6 +243,10 @@ impl VoiceCoordinator {
             self.timeout_polish();
             return;
         }
+        if self.state == VoiceState::Ready && self.state_since.elapsed() >= DELIVERY_TIMEOUT {
+            self.timeout_delivery();
+            return;
+        }
         let Some(backend) = self.backend.as_mut() else {
             return;
         };
@@ -247,10 +257,14 @@ impl VoiceCoordinator {
                 return;
             }
         };
+        // Worker 自身的致命失败（模型加载不起来、采音线程已退出）不带 request 号，
+        // 但必须立刻透出去：挡住它的话用户会看着「正在听」空录一场，还要等识别超时才恢复快捷键。
+        let fatal = snapshot.state == VoiceState::Failed;
         // Start / Stop 已投进 Worker，但它可能还在加载模型或尚未取到下一条命令；
         // 这段间隙不能把 Server 的前进状态倒回去，否则快速按下再松开会丢掉 Stop。
         // Recreating 之后收到 Polishing 是前进：识别完成、正在润色。
-        if self.request.is_some()
+        if !fatal
+            && self.request.is_some()
             && (snapshot.request.is_none()
                 || (matches!(self.state, VoiceState::Recognizing | VoiceState::Polishing)
                     && snapshot.state == VoiceState::Recording))
@@ -293,12 +307,30 @@ impl VoiceCoordinator {
         {
             tracing::warn!(%error, request, "润色超时后取消 Worker 请求失败");
         }
+        self.session = None;
         self.set_state(VoiceState::Failed);
         self.level = 0;
         self.partial = None;
         self.delivery = None;
         self.message = Some("润色没有完成，请重试".into());
         tracing::warn!(?request, "语音润色超时，已恢复快捷键");
+    }
+
+    /// 结果一直没能写进文档：放弃这一条，别让候选窗与快捷键被 `Ready` 永久占住。
+    fn timeout_delivery(&mut self) {
+        let request = self.request.take();
+        if let (Some(backend), Some(request)) = (self.backend.as_mut(), request)
+            && let Err(error) = backend.cancel(request)
+        {
+            tracing::warn!(%error, request, "交付超时后取消 Worker 请求失败");
+        }
+        self.session = None;
+        self.set_state(VoiceState::Failed);
+        self.level = 0;
+        self.partial = None;
+        self.delivery = None;
+        self.message = Some("语音结果没能写入，请重试".into());
+        tracing::warn!(?request, "语音结果等待确认超时，已恢复快捷键");
     }
 
     fn timeout_recognition(&mut self) {
@@ -308,6 +340,7 @@ impl VoiceCoordinator {
         {
             tracing::warn!(%error, request, "识别超时后取消 Worker 请求失败");
         }
+        self.session = None;
         self.set_state(VoiceState::Failed);
         self.level = 0;
         self.partial = None;
@@ -336,7 +369,7 @@ mod tests {
     use qingjian_platform::protocol::{SessionId, VoiceAction, VoiceState};
     use qingjian_voice::WorkerSnapshot;
 
-    use super::{RECOGNITION_TIMEOUT, VoiceCoordinator};
+    use super::{DELIVERY_TIMEOUT, RECOGNITION_TIMEOUT, VoiceCoordinator};
     use crate::voice::{VoiceBackend, VoiceBackendError};
 
     #[derive(Default)]
@@ -496,6 +529,72 @@ mod tests {
         assert_eq!(sync.state, VoiceState::Idle);
         assert_eq!(sync.message.as_deref(), Some("没有听清"));
         assert!(!voice.owns(session));
+
+        voice.handle(session, VoiceAction::Start);
+        assert_eq!(voice.sync(session).state, VoiceState::Recording);
+    }
+
+    /// 模型加载失败的 Worker：命令照收（只是进了丢弃循环），快照永远是不带 request 的 Failed。
+    struct BrokenBackend;
+
+    impl VoiceBackend for BrokenBackend {
+        fn start(&mut self, _request: u64) -> Result<(), VoiceBackendError> {
+            Ok(())
+        }
+
+        fn stop(&mut self, _request: u64) -> Result<(), VoiceBackendError> {
+            Ok(())
+        }
+
+        fn cancel(&mut self, _request: u64) -> Result<(), VoiceBackendError> {
+            Ok(())
+        }
+
+        fn snapshot(&mut self) -> Result<WorkerSnapshot, VoiceBackendError> {
+            Ok(WorkerSnapshot {
+                state: VoiceState::Failed,
+                message: Some("语音模型加载失败".into()),
+                ..WorkerSnapshot::default()
+            })
+        }
+    }
+
+    #[test]
+    fn worker_failure_without_a_request_is_reported_immediately() {
+        let session = SessionId(21);
+        let mut voice = VoiceCoordinator::default();
+        voice.configure(VoiceTrigger::RightAlt, Box::new(BrokenBackend));
+        voice.handle(session, VoiceAction::Start);
+
+        let sync = voice.sync(session);
+        assert_eq!(sync.state, VoiceState::Failed);
+        assert_eq!(sync.message.as_deref(), Some("语音模型加载失败"));
+    }
+
+    #[test]
+    fn undelivered_result_times_out_and_frees_the_window() {
+        let shared = Arc::new(Mutex::new(WorkerSnapshot::default()));
+        let backend = FakeBackend {
+            snapshot: shared.clone(),
+        };
+        let session = SessionId(22);
+        let mut voice = VoiceCoordinator::default();
+        voice.configure(VoiceTrigger::RightAlt, Box::new(backend));
+        voice.handle(session, VoiceAction::Start);
+        voice.handle(session, VoiceAction::Stop);
+        *shared.lock().unwrap() = WorkerSnapshot {
+            state: VoiceState::Ready,
+            request: Some(1),
+            text: Some("没人来取".into()),
+            ..WorkerSnapshot::default()
+        };
+        assert!(voice.sync(session).delivery.is_some());
+
+        voice.state_since = Instant::now() - DELIVERY_TIMEOUT - Duration::from_millis(1);
+        let timed_out = voice.sync(session);
+        assert_eq!(timed_out.state, VoiceState::Failed);
+        assert!(timed_out.delivery.is_none());
+        assert!(!voice.is_active());
 
         voice.handle(session, VoiceAction::Start);
         assert_eq!(voice.sync(session).state, VoiceState::Recording);

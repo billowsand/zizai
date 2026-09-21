@@ -77,10 +77,15 @@ impl Router {
 
     /// 把候选窗原地切成语音态；不新建第二个浮窗。
     pub(super) fn reconcile_voice(&mut self, session: SessionId, sync: &VoiceSync) {
+        // 活跃阶段要与 [`VoiceCoordinator::is_active`] 一致：这里少一个阶段，
+        // 窗口就会停在上一阶段的画面（润色期尤其明显，最长十几秒）。
         let active = self.voice.owns(session)
             && matches!(
                 sync.state,
-                VoiceState::Recording | VoiceState::Recognizing | VoiceState::Ready
+                VoiceState::Recording
+                    | VoiceState::Recognizing
+                    | VoiceState::Polishing
+                    | VoiceState::Ready
             );
         if active {
             if let Some(rect) = self.last_rect {

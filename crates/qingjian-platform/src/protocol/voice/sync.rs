@@ -33,11 +33,16 @@ pub struct VoiceSync {
 }
 
 impl VoiceSync {
-    /// 录音、识别或等待确认期间需要 80 ms 同步。
+    /// 录音、识别、润色或等待确认期间需要 80 ms 同步。
+    /// 漏掉任何一个进行中的阶段，TSF 那边就会当语音已经结束：降回 320 ms 同步、Esc 不再取消，
+    /// 再按一次快捷键还会被当成新的开始。
     pub fn is_active(&self) -> bool {
         matches!(
             self.state,
-            VoiceState::Recording | VoiceState::Recognizing | VoiceState::Ready
+            VoiceState::Recording
+                | VoiceState::Recognizing
+                | VoiceState::Polishing
+                | VoiceState::Ready
         )
     }
 }
