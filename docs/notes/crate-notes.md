@@ -116,7 +116,8 @@ Engine 侧在 `engine/rescoring/`：接了打分器就取 Viterbi 前 `RESCORE_P
 ## crates/qingjian-voice
 
 Windows 本地语音输入的可复用层：`Controller` 在后台线程加载 sherpa-onnx SenseVoice，按命令打开 / 关闭默认或指定麦克风，
-把交错 PCM 混成单声道并重采样到 16 kHz，最终只返回非空识别文本。`WorkerRequest` / `WorkerResponse` 使用平台层的
+把交错 PCM 混成单声道并重采样到 16 kHz，最终只返回非空识别文本。采音按设备自己的混音格式建流（f32 / i16 / u16 / i32
+都收，回调里转 f32），共享模式下写死 f32 会让整数格式的麦克风直接打不开。`WorkerRequest` / `WorkerResponse` 使用平台层的
 长度前缀 JSON 帧在 stdio 上传输；不含全局键盘钩子、剪贴板或模拟粘贴。
 SenseVoice 固定开启 ITN，但短句常不输出标点。`[voice] punctuation = true`（缺省开）时，识别结果先交给
 sherpa-onnx CT-Transformer 离线标点恢复（`asr::Punctuator`）再上屏；Server 按随包根的

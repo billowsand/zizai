@@ -8,6 +8,7 @@ mod silence;
 use std::sync::mpsc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::{FromSample, Sample, SampleFormat, SizedSample};
 
 use crate::VoiceError;
 
@@ -39,17 +40,21 @@ pub(crate) fn open_input(
         .map_err(|error| VoiceError::Audio(error.to_string()))?;
     let sample_rate = supported.sample_rate().0;
     let channels = supported.channels();
+    // 共享模式下 WASAPI 只接受设备自己的混音格式：写死 f32 会让整数格式的麦克风直接开不起来。
+    let format = supported.sample_format();
     let config: cpal::StreamConfig = supported.into();
-    let stream = device
-        .build_input_stream(
-            &config,
-            move |data: &[f32], _| {
-                let _ = sender.try_send(data.to_vec());
-            },
-            |error| tracing::error!(%error, "语音输入流出错"),
-            None,
-        )
-        .map_err(|error| VoiceError::Audio(error.to_string()))?;
+    let stream = match format {
+        SampleFormat::F32 => build_stream::<f32>(&device, &config, sender),
+        SampleFormat::I16 => build_stream::<i16>(&device, &config, sender),
+        SampleFormat::U16 => build_stream::<u16>(&device, &config, sender),
+        SampleFormat::I32 => build_stream::<i32>(&device, &config, sender),
+        other => {
+            return Err(VoiceError::Audio(format!(
+                "unsupported input sample format: {other}"
+            )));
+        }
+    }
+    .map_err(|error| VoiceError::Audio(error.to_string()))?;
     stream
         .play()
         .map_err(|error| VoiceError::Audio(error.to_string()))?;
@@ -59,6 +64,30 @@ pub(crate) fn open_input(
         channels,
         name,
     })
+}
+
+/// 采音回调里只做格式转换与一次非阻塞投递：后面的环节再慢也不能拖住音频线程。
+fn build_stream<T>(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    sender: mpsc::SyncSender<Vec<f32>>,
+) -> Result<cpal::Stream, cpal::BuildStreamError>
+where
+    T: SizedSample + Send + 'static,
+    f32: FromSample<T>,
+{
+    device.build_input_stream(
+        config,
+        move |data: &[T], _| {
+            let chunk = data
+                .iter()
+                .map(|sample| f32::from_sample(*sample))
+                .collect();
+            let _ = sender.try_send(chunk);
+        },
+        |error| tracing::error!(%error, "语音输入流出错"),
+        None,
+    )
 }
 
 pub(crate) fn is_meaningful(text: &str) -> bool {

@@ -208,8 +208,13 @@ fn run_windows(
         };
         match command {
             Command::Start(request) => {
-                if opened.is_some() {
-                    continue;
+                // 上一轮还开着（Server 那边已经放弃它了，比如超时后重来）：直接接管。
+                // 丢掉这条 Start 的话，快照会一直停在旧 request 上，Server 的 Stop 也对不上号，
+                // 只能干等到识别超时。
+                if opened.take().is_some() {
+                    tracing::warn!(request, "上一轮录音还没结束，新请求直接接管");
+                    preview = None;
+                    started = None;
                 }
                 while audio_receiver.try_recv().is_ok() {}
                 samples.clear();
