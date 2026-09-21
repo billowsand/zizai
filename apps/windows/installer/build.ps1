@@ -33,6 +33,13 @@
 .PARAMETER VoiceModelDir
     可选的 SenseVoice 模型目录，必须含 model.int8.onnx 与 tokens.txt。仅用于本地测试包；
     正式发布仍不默认携带模型，避免把模型许可与源码许可混为一谈。
+.PARAMETER PunctuationModelDir
+    可选的本地标点恢复模型目录，必须含 model.int8.onnx（sherpa-onnx 的
+    punct-ct-transformer-zh-en …-int8，见 https://github.com/k2-fsa/sherpa-onnx/releases/tag/punctuation-models）。
+    与 -VoiceModelDir 一样仅用于本地测试包；两者常一起用：带标点模型不带 SenseVoice 识别无法工作，意义不大。
+.PARAMETER HrDir
+    可选的同音词替换资源目录，必须含 lexicon.txt 与 replace.fst（sherpa-onnx 同音词替换）。
+    装到 {app}\data\voice\hr；hr_lexicon / hr_rule_fsts 在配置里填相对这个安装根的路径。
 .PARAMETER BuildLabel
     可选的阶段测试标识（仅允许字母、数字、点和短横线），追加到版本号与安装包文件名。
     同一阶段重新打包时递增 r1、r2，避免不同二进制共用文件名。
@@ -46,6 +53,8 @@ param(
     [switch]$PackageOnly,
     [switch]$PreSigned,
     [string]$VoiceModelDir,
+    [string]$PunctuationModelDir,
+    [string]$HrDir,
     [string]$BuildLabel
 )
 
@@ -231,6 +240,25 @@ if ($VoiceModelDir) {
     Write-Host "本地测试包携带 SenseVoice 模型：$VoiceModelDir" -ForegroundColor Yellow
 }
 
+if ($PunctuationModelDir) {
+    $PunctuationModelDir = (Resolve-Path -LiteralPath $PunctuationModelDir).Path
+    if (-not (Test-Path -LiteralPath (Join-Path $PunctuationModelDir 'model.int8.onnx'))) {
+        throw "标点模型目录缺 model.int8.onnx（$PunctuationModelDir）"
+    }
+    Write-Host "本地测试包携带标点恢复模型：$PunctuationModelDir" -ForegroundColor Yellow
+}
+
+if ($HrDir) {
+    $HrDir = (Resolve-Path -LiteralPath $HrDir).Path
+    $missingHr = @('lexicon.txt', 'replace.fst') | Where-Object {
+        -not (Test-Path -LiteralPath (Join-Path $HrDir $_))
+    }
+    if ($missingHr.Count -gt 0) {
+        throw "同音词替换目录缺文件：$($missingHr -join '、')（$HrDir）"
+    }
+    Write-Host "本地测试包携带同音词替换资源：$HrDir" -ForegroundColor Yellow
+}
+
 # 3) 找 ISCC.exe：先 Program Files 与每用户安装的 7（与开发机同版本；CI 镜像 PATH 上自带 Chocolatey 的 6，不带简中翻译，不能让它抢先），
 #    再 PATH，最后 6。QINGJIAN_ISCC 环境变量可直接指定。
 $iscc = $env:QINGJIAN_ISCC
@@ -261,6 +289,8 @@ Write-Host "用 $iscc" -ForegroundColor Cyan
 $isccArgs = @("/DAppVersion=$Version", "/DAppVersionNumeric=$VersionNumeric")
 if ($WinUiSettings) { $isccArgs += '/DWinUiSettings=1' }
 if ($VoiceModelDir) { $isccArgs += "/DVoiceModelDir=$VoiceModelDir" }
+if ($PunctuationModelDir) { $isccArgs += "/DPunctModelDir=$PunctuationModelDir" }
+if ($HrDir) { $isccArgs += "/DHrModelDir=$HrDir" }
 & $iscc @isccArgs $Iss
 if ($LASTEXITCODE -ne 0) { throw "iscc 失败（退出码 $LASTEXITCODE）" }
 

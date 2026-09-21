@@ -10,6 +10,9 @@ use super::VoiceBackend;
 /// 本地短句通常数秒内完成；超过这个上限说明 Worker 或原生推理卡住，必须恢复可再次录音。
 const RECOGNITION_TIMEOUT: Duration = Duration::from_secs(45);
 
+/// 润色档位开时的大模型墙钟保险；Worker 自己 15 秒超时退原文，这层只为兜住死进程。
+const POLISH_TIMEOUT: Duration = Duration::from_secs(20);
+
 /// Server 内唯一的语音输入协调器。
 pub struct VoiceCoordinator {
     enabled: bool,
@@ -65,7 +68,10 @@ impl VoiceCoordinator {
     pub fn is_active(&self) -> bool {
         matches!(
             self.state,
-            VoiceState::Recording | VoiceState::Recognizing | VoiceState::Ready
+            VoiceState::Recording
+                | VoiceState::Recognizing
+                | VoiceState::Polishing
+                | VoiceState::Ready
         )
     }
 
@@ -174,7 +180,10 @@ impl VoiceCoordinator {
             return;
         }
         if self.session == Some(session)
-            && matches!(self.state, VoiceState::Recording | VoiceState::Recognizing)
+            && matches!(
+                self.state,
+                VoiceState::Recording | VoiceState::Recognizing | VoiceState::Polishing
+            )
         {
             return;
         }
@@ -224,6 +233,10 @@ impl VoiceCoordinator {
             self.timeout_recognition();
             return;
         }
+        if self.state == VoiceState::Polishing && self.state_since.elapsed() >= POLISH_TIMEOUT {
+            self.timeout_polish();
+            return;
+        }
         let Some(backend) = self.backend.as_mut() else {
             return;
         };
@@ -236,9 +249,10 @@ impl VoiceCoordinator {
         };
         // Start / Stop 已投进 Worker，但它可能还在加载模型或尚未取到下一条命令；
         // 这段间隙不能把 Server 的前进状态倒回去，否则快速按下再松开会丢掉 Stop。
+        // Recreating 之后收到 Polishing 是前进：识别完成、正在润色。
         if self.request.is_some()
             && (snapshot.request.is_none()
-                || (self.state == VoiceState::Recognizing
+                || (matches!(self.state, VoiceState::Recognizing | VoiceState::Polishing)
                     && snapshot.state == VoiceState::Recording))
         {
             return;
@@ -269,6 +283,22 @@ impl VoiceCoordinator {
         self.partial = None;
         self.message = Some(message);
         self.delivery = None;
+    }
+
+    /// 死进程保险：正常情况下 Worker 自己 15 秒超时早就退回原文，走不到这里。
+    fn timeout_polish(&mut self) {
+        let request = self.request.take();
+        if let (Some(backend), Some(request)) = (self.backend.as_mut(), request)
+            && let Err(error) = backend.cancel(request)
+        {
+            tracing::warn!(%error, request, "润色超时后取消 Worker 请求失败");
+        }
+        self.set_state(VoiceState::Failed);
+        self.level = 0;
+        self.partial = None;
+        self.delivery = None;
+        self.message = Some("润色没有完成，请重试".into());
+        tracing::warn!(?request, "语音润色超时，已恢复快捷键");
     }
 
     fn timeout_recognition(&mut self) {

@@ -3,7 +3,10 @@
 mod backend;
 mod coordinator;
 mod error;
+mod hotwords;
 mod process;
+
+pub use hotwords::collect;
 
 pub use backend::VoiceBackend;
 pub use coordinator::VoiceCoordinator;

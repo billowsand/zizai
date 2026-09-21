@@ -14,6 +14,7 @@ C:\Program Files\Qingjian\
     Microsoft.UI.Xaml.dll …   仅 `-WinUiSettings` 对比包包含的 Windows App Runtime
     qingjian.ico              开始菜单 / 启动项快捷方式的图标（exe 里也嵌了一份）
     data\generated\           dict.qj / lm.qj / english.tsv / dicts\*.qj
+    data\voice\               仅 -VoiceModelDir / -PunctuationModelDir / -HrDir 本地测试包包含
     assets\                   emoji\ sample\
 ```
 
@@ -68,7 +69,18 @@ powershell -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1
 本地语音联调时可把已经准备好的 SenseVoice 一并放入测试包；目录须含 `model.int8.onnx` 与 `tokens.txt`：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1 -VoiceModelDir D:\auto-voice\models\sense-voice
+powershell -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1 -VoiceModelDir E:\auto-voice\models\sense-voice
+```
+
+标点恢复与同音词替换资源同理；带这三个开关的资源打进包后**装完即用，无需在设置里填任何路径**——
+Server 按固定相对路径（`data\voice\punctuation\model.int8.onnx`、`data\voice\hr\lexicon.txt`、`replace.fst`）
+自动发现，设置里只选择加载与否（关着不加载；文件不在时自动跳过，不影响语音输入）。标点模型用 sherpa-onnx 的
+`sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8`（72 MB，从
+[punctuation-models Release](https://github.com/k2-fsa/sherpa-onnx/releases/tag/punctuation-models) 下载）。
+通常与 `-VoiceModelDir` 一起传：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1 -VoiceModelDir E:\auto-voice\models\sense-voice -PunctuationModelDir data\voice\punctuation -HrDir E:\auto-voice\models\hr
 ```
 
 此参数只用于本地测试，正式发布包不默认分发第三方模型。

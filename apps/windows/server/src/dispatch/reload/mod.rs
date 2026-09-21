@@ -162,6 +162,7 @@ impl Router {
         }
         let root = reload.root.clone();
         let worker = reload.voice_worker.clone();
+        let user_dir = reload.user_dir.clone();
         if let Some(reload) = self.reload.as_mut() {
             reload.applied_voice = config.voice.clone();
             reload.applied_voice_trigger = config.shortcut.voice;
@@ -176,7 +177,12 @@ impl Router {
                 .configure_failure(config.shortcut.voice, "找不到语音工作进程".into());
             return;
         };
-        match ProcessVoiceBackend::spawn_configured(&worker, &root, &config.voice) {
+        match ProcessVoiceBackend::spawn_configured(
+            &worker,
+            &root,
+            &config.voice,
+            crate::voice::collect(user_dir.as_deref(), &config.custom_phrases),
+        ) {
             Ok(backend) => {
                 self.voice
                     .configure(config.shortcut.voice, Box::new(backend));

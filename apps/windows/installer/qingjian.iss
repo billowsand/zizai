@@ -105,6 +105,15 @@ Source: "{#Repo}\data\model\model.qjm"; DestDir: "{app}\data\model"; Flags: igno
 Source: "{#VoiceModelDir}\model.int8.onnx"; DestDir: "{app}\data\voice\sense-voice"; Flags: ignoreversion
 Source: "{#VoiceModelDir}\tokens.txt"; DestDir: "{app}\data\voice\sense-voice"; Flags: ignoreversion
 #endif
+; —— 本地测试包可显式携带标点恢复模型（同时传 -PunctuationModelDir），装进后配到设置页「标点模型」——
+#ifdef PunctModelDir
+Source: "{#PunctModelDir}\model.int8.onnx"; DestDir: "{app}\data\voice\punctuation"; Flags: ignoreversion
+#endif
+; —— 本地测试包可显式携带同音词替换资源（-HrDir），配置里 hr_lexicon / hr_rule_fsts 填相对安装根的路径 ——
+#ifdef HrModelDir
+Source: "{#HrModelDir}\lexicon.txt"; DestDir: "{app}\data\voice\hr"; Flags: ignoreversion
+Source: "{#HrModelDir}\replace.fst"; DestDir: "{app}\data\voice\hr"; Flags: ignoreversion
+#endif
 ; —— 随 git 的资源 ——
 Source: "{#Repo}\assets\emoji\emoji-zh.tsv";     DestDir: "{app}\assets\emoji";  Flags: ignoreversion
 Source: "{#Repo}\assets\emoji\emoji-en.tsv";     DestDir: "{app}\assets\emoji";  Flags: ignoreversion

@@ -118,9 +118,14 @@ Engine 侧在 `engine/rescoring/`：接了打分器就取 Viterbi 前 `RESCORE_P
 Windows 本地语音输入的可复用层：`Controller` 在后台线程加载 sherpa-onnx SenseVoice，按命令打开 / 关闭默认或指定麦克风，
 把交错 PCM 混成单声道并重采样到 16 kHz，最终只返回非空识别文本。`WorkerRequest` / `WorkerResponse` 使用平台层的
 长度前缀 JSON 帧在 stdio 上传输；不含全局键盘钩子、剪贴板或模拟粘贴。
-SenseVoice 固定开启 ITN，原生输出标点与规范化数字。可选的最终整理层由 Worker 调用用户配置的
-OpenAI 兼容 `/v1/chat/completions` 服务：剥掉思考标签后检查正文长度、改字数量和 ASCII 片段，超时、
-增删正文或返回异常时使用 SenseVoice 原文。程序不携带、启动或管理大模型。
+SenseVoice 固定开启 ITN，但短句常不输出标点。`[voice] punctuation = true`（缺省开）时，识别结果先交给
+sherpa-onnx CT-Transformer 离线标点恢复（`asr::Punctuator`）再上屏；Server 按随包根的
+`data\voice\punctuation\model.int8.onnx` 自动发现模型（settings-egui「语音输入」页只有开/关），文件不在或模型坏只降级到原文。
+大模型整理按 `[voice] polish` 档位选：`off` / `spoken`（只去口水词，删除量红线 15%）/ `written`（转书面，
+编辑距离红线 45%）。整理在 `VoiceState::Polishing`（候选窗标题「正在转化」）里整段一次调用，完不成退原文；
+Server 把用户自己建立的写法（custom phrases + `user.tsv` 高频 + `user-words.tsv` 用户词）作热词注入
+system prompt，让模型按原样保留。请求剥掉思考标签后按档位红线（编辑距离与 ASCII 段一致校验）检查，超时、
+增删正文或返回异常时使用标点恢复（或原文）结果。程序不携带、启动或管理大模型。
 实现源自 auto-voice（MIT，Copyright (c) 2026 billowsand），完整许可见根目录 `THIRD_PARTY_NOTICES.md`。
 
 ## apps/cli
@@ -148,7 +153,8 @@ Windows 产品由 `server`（IPC 分派 + Engine + 自绘候选窗与悬浮状�
 配置的语音开关键，经既有 `SyncMode` 轮询获得 `VoiceSync`；最终文本由异步 `RequestEditSession` 直接写入开始录音时的文档，
 成功后发 `VoiceAck`。Server 在 ACK 前重复交付，TSF 记录“已排队 / 已写入未确认”请求号，因此重连不会重复插字。
 普通键入、失焦、切走输入法或关闭会话会取消当前听写；密码框的键盘禁用 compartment 直接放行语音键。
-配置 `[voice]` 缺省关闭，模型路径相对随包根；`polish_enabled` 单独控制大模型语句整理，缺省关闭；配置变化会停掉当前请求并重启 Worker。
+配置 `[voice]` 缺省关闭，模型路径相对随包根；`polish_enabled` 单独控制大模型语句整理，缺省关闭；`punctuation` 与 `hr`
+是随包资源（`data\voice\punctuation` / `data\voice\hr`）的加载开关，缺省开、资源不在自动降级；配置变化会停掉当前请求并重启 Worker。
 
 用户可见品牌是「字在」，内部 crate、可执行文件、`Qingjian` 数据与安装目录、`.qj` 格式名暂不迁移。图标矢量源在 `assets/icon/logo.svg`，
 `assets/icon/generate.py` 生成主 PNG 与 TSF / 设置 / Server / 安装器共用的多尺寸 `qingjian.ico`。

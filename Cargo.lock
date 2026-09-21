@@ -4266,6 +4266,8 @@ dependencies = [
  "qingjian-platform",
  "qingjian-voice",
  "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
  "winresource",
 ]
 

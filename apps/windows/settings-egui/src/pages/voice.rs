@@ -94,26 +94,59 @@ pub(crate) fn view(settings: &mut Settings, ui: &mut egui::Ui) {
                 },
             );
 
+            let mut punctuation = settings.config.voice.punctuation;
             list.row(
                 "\u{E8D2}",
-                "SenseVoice 原生标点",
-                "SenseVoice 通过 ITN 直接输出标点和规范化数字，无需额外模型。",
-                |ui| ui.add_enabled(false, egui::Button::new("已开启")),
+                "标点模型",
+                "识别后给句子补上标点（sherpa-onnx CT-Transformer）。随包 data\\voice\\punctuation 存在时自动加载；文件不在则自动跳过。",
+                |ui| {
+                    ui.add_enabled_ui(voice, |ui| {
+                        let response = toggle(ui, &mut punctuation, "标点模型");
+                        if response.changed() {
+                            settings.save("voice", "punctuation", punctuation);
+                        }
+                        response
+                    })
+                    .inner
+                },
+            );
+
+            let mut hr = settings.config.voice.hr;
+            list.row(
+                "\u{E777}",
+                "同音词替换",
+                "识别结果按同音词词典替换常见错词（如「在见」→「再见」）。随包 data\\voice\\hr 存在时自动加载；文件不在则自动跳过。",
+                |ui| {
+                    ui.add_enabled_ui(voice, |ui| {
+                        let response = toggle(ui, &mut hr, "同音词替换");
+                        if response.changed() {
+                            settings.save("voice", "hr", hr);
+                        }
+                        response
+                    })
+                    .inner
+                },
             );
         });
 
-        caption(ui, "大模型整理");
+        caption(ui, "转写整理");
         list(ui, |list| {
-            let mut polish = settings.config.voice.polish_enabled;
+            let policy = settings.config.voice.polish_level();
+            let selected = match policy {
+                qingjian_platform::PolishLevel::Off => 0,
+                qingjian_platform::PolishLevel::Spoken => 1,
+                qingjian_platform::PolishLevel::Written => 2,
+            };
             list.row(
                 "\u{E8D4}",
-                "语句整理",
-                "把 SenseVoice 最终转写发给已配置的 OpenAI 兼容服务，修正少量错字与断句。",
+                "整理档位",
+                "识别完成后、上屏之前，把转写发给已配置的本地大模型服务整理；服务不出声时先显示原文，慢一点也能看到进度。",
                 |ui| {
                     ui.add_enabled_ui(voice, |ui| {
-                        let response = toggle(ui, &mut polish, "语句整理");
-                        if response.changed() {
-                            settings.save("voice", "polish_enabled", polish);
+                        let (response, picked) =
+                            show_combo(ui, "voice-polish-level", &POLISH_LEVELS, selected);
+                        if let Some(value) = picked {
+                            settings.save("voice", "polish", value);
                         }
                         response
                     })
@@ -126,19 +159,22 @@ pub(crate) fn view(settings: &mut Settings, ui: &mut egui::Ui) {
                 "服务地址",
                 "例如 LM Studio 的 http://localhost:1234；程序会请求 /v1/chat/completions。",
                 |ui| {
-                    ui.add_enabled_ui(voice && polish, |ui| {
-                        let response = ui.add_sized(
-                            [CONTROL_WIDTH, 28.0],
-                            egui::TextEdit::singleline(&mut settings.voice_polish_url_edit),
-                        );
-                        if response.changed() {
-                            settings.voice_polish_edited();
-                        }
-                        if response.lost_focus() {
-                            settings.flush_voice_polish_edits(true);
-                        }
-                        response
-                    })
+                    ui.add_enabled_ui(
+                        voice && policy != qingjian_platform::PolishLevel::Off,
+                        |ui| {
+                            let response = ui.add_sized(
+                                [CONTROL_WIDTH, 28.0],
+                                egui::TextEdit::singleline(&mut settings.voice_polish_url_edit),
+                            );
+                            if response.changed() {
+                                settings.voice_polish_edited();
+                            }
+                            if response.lost_focus() {
+                                settings.flush_voice_polish_edits(true);
+                            }
+                            response
+                        },
+                    )
                     .inner
                 },
             );
@@ -148,19 +184,22 @@ pub(crate) fn view(settings: &mut Settings, ui: &mut egui::Ui) {
                 "模型名称",
                 "填服务在 /v1/models 中公布的模型 ID。",
                 |ui| {
-                    ui.add_enabled_ui(voice && polish, |ui| {
-                        let response = ui.add_sized(
-                            [CONTROL_WIDTH, 28.0],
-                            egui::TextEdit::singleline(&mut settings.voice_polish_model_edit),
-                        );
-                        if response.changed() {
-                            settings.voice_polish_edited();
-                        }
-                        if response.lost_focus() {
-                            settings.flush_voice_polish_edits(true);
-                        }
-                        response
-                    })
+                    ui.add_enabled_ui(
+                        voice && policy != qingjian_platform::PolishLevel::Off,
+                        |ui| {
+                            let response = ui.add_sized(
+                                [CONTROL_WIDTH, 28.0],
+                                egui::TextEdit::singleline(&mut settings.voice_polish_model_edit),
+                            );
+                            if response.changed() {
+                                settings.voice_polish_edited();
+                            }
+                            if response.lost_focus() {
+                                settings.flush_voice_polish_edits(true);
+                            }
+                            response
+                        },
+                    )
                     .inner
                 },
             );
@@ -168,10 +207,17 @@ pub(crate) fn view(settings: &mut Settings, ui: &mut egui::Ui) {
 
         note(
             ui,
-            "SenseVoice 已会输出基本标点。大模型整理是可选增强；服务未启动、超时或改动过大时，会直接使用 SenseVoice 原文。",
+            "标点模型与同音词替换用随包资源，安装/卸载一起走，设置里只选择开还是关。转写整理是可选增强；服务未启动、超时或改动超出红线时，会直接使用识别原文。",
         );
     });
 }
+
+/// 大模型整理档位选项：（界面文案，配置值）；`show_combo` 的选项都是这个顺序。
+const POLISH_LEVELS: [(&str, &str); 3] = [
+    ("关", "off"),
+    ("只去口水词（不换任何词语）", "spoken"),
+    ("转书面（整理成通顺表达）", "written"),
+];
 
 fn show_combo(
     ui: &mut egui::Ui,

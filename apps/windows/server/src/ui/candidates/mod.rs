@@ -167,7 +167,8 @@ impl CandidateWindow {
                 VoiceTone::Listening,
                 true,
             ),
-            VoiceState::Recognizing => ("正在识别", "正在整理转写…", VoiceTone::Working, true),
+            VoiceState::Recognizing => ("正在识别", "正在转写…", VoiceTone::Working, true),
+            VoiceState::Polishing => ("正在转化", "大模型润色中…", VoiceTone::Working, true),
             VoiceState::Ready => ("即将上屏", "识别完成", VoiceTone::Success, true),
             VoiceState::Failed => (
                 "语音暂不可用",

@@ -217,6 +217,7 @@ fn configure_voice(router: &mut Router, config: &Config, root: &Path) {
         &worker,
         root,
         &config.voice,
+        qingjian_windows_server::voice::collect(user_dir().as_deref(), &config.custom_phrases),
     ) {
         Ok(backend) => {
             router.configure_voice(trigger, Box::new(backend));

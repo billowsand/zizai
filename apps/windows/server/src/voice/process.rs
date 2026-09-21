@@ -4,8 +4,8 @@ use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
-use qingjian_platform::VoiceConfig;
 use qingjian_platform::protocol::{read_message, write_message};
+use qingjian_platform::{PolishLevel, VoiceConfig};
 use qingjian_voice::{WorkerConfig, WorkerRequest, WorkerResponse, WorkerSnapshot};
 
 use super::{VoiceBackend, VoiceBackendError};
@@ -24,12 +24,14 @@ pub struct ProcessVoiceBackend {
 }
 
 impl ProcessVoiceBackend {
-    /// 把用户配置中的相对路径按随包根展开后启动 Worker。
+    /// 把用户配置中的相对路径按随包根展开后启动 Worker；热词是润色的专名保护表。
     pub fn spawn_configured(
         executable: &Path,
         root: &Path,
         config: &VoiceConfig,
+        hotwords: Vec<String>,
     ) -> Result<Self, VoiceBackendError> {
+        let hotwords = (!hotwords.is_empty()).then(|| hotwords.join("\n"));
         let resolve = |value: &str| {
             let path = std::path::PathBuf::from(value);
             if path.is_absolute() {
@@ -38,8 +40,37 @@ impl ProcessVoiceBackend {
                 root.join(path)
             }
         };
-        let optional =
-            |value: &str| (!value.trim().is_empty()).then(|| resolve(value).display().to_string());
+        // 随包的标点模型与同音词替换资源按固定相对路径自动发现；设置里两个布尔开关选择是否加载，
+        // 显式路径字段只留作高级覆盖。
+        let bundled = |value: &str| {
+            let path = root.join(value);
+            path.is_file().then(|| path.display().to_string())
+        };
+        let punctuation_model = if !config.punctuation_model.trim().is_empty() {
+            Some(resolve(&config.punctuation_model).display().to_string())
+        } else if config.punctuation {
+            bundled("data\\voice\\punctuation\\model.int8.onnx")
+        } else {
+            None
+        };
+        let hr_lexicon = if !config.hr_lexicon.trim().is_empty() {
+            Some(resolve(&config.hr_lexicon).display().to_string())
+        } else if config.hr {
+            bundled("data\\voice\\hr\\lexicon.txt")
+        } else {
+            None
+        };
+        let hr_rule_fsts = if !config.hr_rule_fsts.trim().is_empty() {
+            Some(resolve(&config.hr_rule_fsts).display().to_string())
+        } else if config.hr {
+            bundled("data\\voice\\hr\\replace.fst")
+        } else {
+            None
+        };
+        let level = config.polish_level();
+        // polish_url 是 URL 不是随包文件路径：不走 resolve（它会把 "http://…" 拼进安装根目录）。
+        let polish_url = (!config.polish_url.trim().is_empty())
+            .then(|| config.polish_url.trim().trim_end_matches('/').to_owned());
         Self::spawn(
             executable,
             WorkerConfig {
@@ -49,10 +80,17 @@ impl ProcessVoiceBackend {
                 input_device: (!config.input_device.trim().is_empty())
                     .then(|| config.input_device.clone()),
                 auto_stop_ms: config.auto_stop_ms,
-                polish_url: config.polish_enabled.then(|| config.polish_url.clone()),
-                polish_model: config.polish_enabled.then(|| config.polish_model.clone()),
-                hr_lexicon: optional(&config.hr_lexicon),
-                hr_rule_fsts: optional(&config.hr_rule_fsts),
+                punctuation_model,
+                polish: (level != PolishLevel::Off
+                    && !config.polish_url.trim().is_empty()
+                    && !config.polish_model.trim().is_empty())
+                .then_some(level),
+                polish_url,
+                polish_model: (!config.polish_model.trim().is_empty())
+                    .then(|| config.polish_model.clone()),
+                hotwords,
+                hr_lexicon,
+                hr_rule_fsts,
             },
         )
     }
@@ -77,7 +115,7 @@ impl ProcessVoiceBackend {
             input: BufWriter::new(input),
             output: BufReader::new(output),
         };
-        backend.exchange(WorkerRequest::Configure(config))?;
+        backend.exchange(WorkerRequest::Configure(Box::new(config)))?;
         Ok(backend)
     }
 

@@ -87,20 +87,24 @@ fn run_windows(
 ) {
     use std::time::{Duration, Instant};
 
-    use crate::asr::{AsrConfig, AsrEngine, HrConfig};
+    use crate::asr::{AsrConfig, AsrEngine, HrConfig, Punctuator};
     use crate::audio::{
         LivePreview, OpenedInput, SilenceDetector, open_input, rms_energy, visual_level,
     };
     use crate::polish::TextPolisher;
 
+    // 同音词资源是可选项：路径给到但文件不在（比如装机后文件被删）就丢掉这一项，
+    // 不让 sherpa 建识别器失败拖垮整条语音输入。
+    let existing =
+        |path: Option<String>| path.filter(|value| std::fs::exists(value).unwrap_or(false));
     let asr = AsrConfig {
         model: config.model,
         tokens: config.tokens,
         language: config.language,
     };
     let hr = HrConfig {
-        lexicon: config.hr_lexicon,
-        rule_fsts: config.hr_rule_fsts,
+        lexicon: existing(config.hr_lexicon),
+        rule_fsts: existing(config.hr_rule_fsts),
     };
     let engine = match AsrEngine::new(&asr, &hr) {
         Ok(engine) => Arc::new(engine),
@@ -119,11 +123,27 @@ fn run_windows(
         }
     };
     tracing::info!("语音模型已加载");
+    // 标点恢复是可选增强：路径错或模型坏只降级到原文，不打断语音输入。
+    let punctuator = match Punctuator::new(config.punctuation_model.as_deref()) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(%error, "标点模型加载失败，退回 SenseVoice 原文");
+            None
+        }
+    };
     let polisher = config
-        .polish_url
-        .as_deref()
+        .polish
+        .as_ref()
+        .zip(config.polish_url.as_deref())
         .zip(config.polish_model.as_deref())
-        .and_then(|(url, model)| TextPolisher::new(url, model));
+        .and_then(|((level, url), model)| {
+            TextPolisher::new(*level, url, model, config.hotwords.clone())
+        });
+    let pipeline = PostPipeline {
+        engine: engine.clone(),
+        punctuator,
+        polisher,
+    };
     replace_snapshot(
         snapshot,
         WorkerSnapshot {
@@ -173,8 +193,7 @@ fn run_windows(
                     &mut opened,
                     &audio_receiver,
                     &mut samples,
-                    &engine,
-                    polisher.as_ref(),
+                    &pipeline,
                     snapshot,
                 );
                 started = None;
@@ -239,8 +258,7 @@ fn run_windows(
                     &mut opened,
                     &audio_receiver,
                     &mut samples,
-                    &engine,
-                    polisher.as_ref(),
+                    &pipeline,
                     snapshot,
                 );
                 started = None;
@@ -267,14 +285,22 @@ fn run_windows(
     }
 }
 
+/// 一次会话共用，模型已加载完的推理链路：识别 → 标点 → 大模型整理。
+struct PostPipeline {
+    engine: Arc<crate::asr::AsrEngine>,
+
+    punctuator: Option<crate::asr::Punctuator>,
+
+    polisher: Option<crate::polish::TextPolisher>,
+}
+
 #[cfg(windows)]
 fn finish(
     request: u64,
     opened: &mut Option<crate::audio::OpenedInput>,
     receiver: &mpsc::Receiver<Vec<f32>>,
     samples: &mut Vec<f32>,
-    engine: &crate::asr::AsrEngine,
-    polisher: Option<&crate::polish::TextPolisher>,
+    pipeline: &PostPipeline,
     snapshot: &Arc<Mutex<WorkerSnapshot>>,
 ) {
     use qingjian_platform::protocol::VoiceState;
@@ -299,13 +325,31 @@ fn finish(
         },
     );
     let result = crate::audio::to_mono_16k(samples, sample_rate, channels)
-        .and_then(|mono| engine.transcribe(&mono));
+        .and_then(|mono| pipeline.engine.transcribe(&mono));
     samples.clear();
     match result {
         Ok(text) if crate::audio::is_meaningful(&text) => {
-            let text = polisher
-                .and_then(|value| value.polish(&text))
-                .unwrap_or(text);
+            let recognized = pipeline
+                .punctuator
+                .as_ref()
+                .map_or_else(|| text.clone(), |value| value.add(&text));
+            // 润色开时先公示“正在转化”这一态（候选窗显示草稿与大模型提示），结束后才一次性 Ready。
+            if pipeline.polisher.is_some() {
+                replace_snapshot(
+                    snapshot,
+                    WorkerSnapshot {
+                        state: VoiceState::Polishing,
+                        request: Some(request),
+                        partial: Some(recognized.clone()),
+                        ..WorkerSnapshot::default()
+                    },
+                );
+            }
+            let text = pipeline
+                .polisher
+                .as_ref()
+                .and_then(|value| value.polish(&recognized))
+                .unwrap_or(recognized);
             tracing::info!(request, chars = text.chars().count(), "语音识别完成");
             replace_snapshot(
                 snapshot,

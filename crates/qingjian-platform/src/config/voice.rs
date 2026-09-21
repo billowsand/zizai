@@ -2,6 +2,21 @@
 
 use serde::{Deserialize, Serialize};
 
+/// 大模型整理档位：体现允许的改动强度。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolishLevel {
+    /// 关闭，直接用识别结果。
+    #[default]
+    Off,
+
+    /// 只去口语填充词，不换任何用词；改动红线最严。
+    Spoken,
+
+    /// 去填充词后转成书面表达，允许改写措辞；整段差异红线较宽。
+    Written,
+}
+
 /// 配置文件 `[voice]` 分节。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -24,7 +39,19 @@ pub struct VoiceConfig {
     /// 检测到说话后，连续静音多久自动结束录音；0 表示关闭。
     pub auto_stop_ms: u64,
 
-    /// 是否用 OpenAI 兼容的大模型服务整理最终转写。
+    /// 本地标点恢复模型自动加载（随包 `data\voice\punctuation\model.int8.onnx` 存在时生效）；文件不在则静默降级。
+    pub punctuation: bool,
+
+    /// 本地标点恢复模型的显式路径覆盖；空则用随包路径。
+    pub punctuation_model: String,
+
+    /// 同音词替换资源自动加载（随包 `data\voice\hr\` 存在时生效）。
+    pub hr: bool,
+
+    /// 大模型整理档位；配置缺省没有 `polish` 键时回退旧 `polish_enabled`（开 = `Spoken`）。
+    pub polish: Option<PolishLevel>,
+
+    /// 旧配置的语句整理总开关；只用于迁移，新配置写 `polish`。
     pub polish_enabled: bool,
 
     /// OpenAI 兼容服务根地址，例如 LM Studio。
@@ -40,6 +67,17 @@ pub struct VoiceConfig {
     pub hr_rule_fsts: String,
 }
 
+impl VoiceConfig {
+    /// 生效的整理档位：显式 `polish` 键优先，老配置回退 `polish_enabled`。
+    pub fn polish_level(&self) -> PolishLevel {
+        match self.polish {
+            Some(level) => level,
+            None if self.polish_enabled => PolishLevel::Spoken,
+            None => PolishLevel::Off,
+        }
+    }
+}
+
 impl Default for VoiceConfig {
     fn default() -> Self {
         Self {
@@ -49,6 +87,10 @@ impl Default for VoiceConfig {
             language: "auto".into(),
             input_device: String::new(),
             auto_stop_ms: 0,
+            punctuation: true,
+            punctuation_model: String::new(),
+            hr: true,
+            polish: None,
             polish_enabled: false,
             polish_url: "http://localhost:1234".into(),
             polish_model: "local-model".into(),

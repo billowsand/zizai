@@ -30,7 +30,7 @@ pub use preedit_mode::PreeditMode;
 pub use shortcut::ShortcutConfig;
 pub use status_bar::StatusBarConfig;
 pub use theme_mode::ThemeMode;
-pub use voice::VoiceConfig;
+pub use voice::{PolishLevel, VoiceConfig};
 pub use voice_trigger::VoiceTrigger;
 
 /// 用户配置文件（TOML）。所有平台同一份格式，缺省值全部在各分节的 `Default` 里。
@@ -154,13 +154,20 @@ language = "auto"
 input_device = ""
 # 检测到说话后，连续静音多少毫秒自动开始识别；0 表示仍需再按一次快捷键
 auto_stop_ms = 0
-# SenseVoice 已原生输出标点；可选再用 OpenAI 兼容大模型服务修正少量错字与断句
-polish_enabled = false
-polish_url = "http://localhost:1234"
-polish_model = "local-model"
-# 可选 sherpa-onnx 同音词替换资源；留空关闭
+# 本地标点恢复：随包带 data\voice\punctuation\model.int8.onnx 时自动加载（识别后补上标点）；false 关闭
+punctuation = true
+# 可手动指定标点模型路径（覆盖随包位置）；留空用随包的
+punctuation_model = ""
+# 同音词替换：随包带 data\voice\hr\lexicon.txt 与 replace.fst 时自动加载；false 关闭
+hr = true
+# 同音词替换资源显式路径覆盖；留空用随包的
 hr_lexicon = ""
 hr_rule_fsts = ""
+# SenseVoice 已原生输出少量标点；可选再用 OpenAI 兼容大模型服务整理转写。
+# 档位 polish：off 关 | spoken 只去口水词 | written 转书面；不写该键时老配置按 polish_enabled 迁移
+# polish = "off"
+polish_url = "http://localhost:1234"
+polish_model = "local-model"
 
 [status_bar]
 # 桌面上常驻、可拖动的悬浮状态条（Windows）：「中 / 英」格点一下切换模式（开着双拼时还显示方案名）、「，。」格切全角 / 半角标点、齿轮打开设置。
