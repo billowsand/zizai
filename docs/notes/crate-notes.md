@@ -149,9 +149,14 @@ Windows 产品由 `server`（IPC 分派 + Engine + 自绘候选窗与悬浮状�
 与 `installer`（Inno Setup）。不合成一个 crate，因为 DLL 不能带 Engine 的依赖树，见 `apps/windows/README.md`；
 协议类型在 `qingjian-platform::protocol`，设计见 `docs/design/architecture.md`「Windows：TSF」。
 
-语音输入由 Server 启动同目录的 `qingjian-voice-worker.exe`，通过私有 stdio 帧协议控制。TSF 拦截 `[shortcut] voice`
-配置的语音开关键，经既有 `SyncMode` 轮询获得 `VoiceSync`；最终文本由异步 `RequestEditSession` 直接写入开始录音时的文档，
-成功后发 `VoiceAck`。Server 在 ACK 前重复交付，TSF 记录“已排队 / 已写入未确认”请求号，因此重连不会重复插字。
+语音输入由 Server 启动同目录的 `qingjian-voice-worker.exe`，通过私有 stdio 帧协议控制。管道读写全在
+`voice/process` 的 `qingjian-voice-ipc` 线程上，Router 的工人循环只投命令、读共享快照（有活儿 40 ms 刷一次、
+空闲 500 ms），**不要**把任何等 Worker 回话的调用搬回工人循环——它是单线程的，卡住就是全系统吞键。
+Worker 崩溃或管道坏掉写成带原因的 `Failed` 快照，下一次 Start 才重新拉进程；停用时请它自退、300 ms 后强杀。
+`VoiceCoordinator` 对每个会停住的阶段都有墙钟保险（识别 45 s / 润色 20 s / 等 ACK 10 s）。TSF 拦截 `[shortcut] voice`
+配置的语音开关键（按住期间按过别的键就只当组合键，松手不开录音），经既有 `SyncMode` 轮询获得 `VoiceSync`；
+最终文本由异步 `RequestEditSession` 直接写入开始录音时的文档，成功后发 `VoiceAck`。
+Server 在 ACK 前重复交付，TSF 记录“已排队 / 已写入未确认”请求号，因此重连不会重复插字。
 普通键入、失焦、切走输入法或关闭会话会取消当前听写；密码框的键盘禁用 compartment 直接放行语音键。
 配置 `[voice]` 缺省关闭，模型路径相对随包根；`polish_enabled` 单独控制大模型语句整理，缺省关闭；`punctuation` 与 `hr`
 是随包资源（`data\voice\punctuation` / `data\voice\hr`）的加载开关，缺省开、资源不在自动降级；配置变化会停掉当前请求并重启 Worker。
