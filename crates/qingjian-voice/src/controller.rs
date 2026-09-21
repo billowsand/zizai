@@ -291,6 +291,7 @@ fn run_windows(
 }
 
 /// 一次会话共用，模型已加载完的推理链路：识别 → 标点 → 大模型整理。
+#[cfg(windows)]
 struct PostPipeline {
     engine: Arc<crate::asr::AsrEngine>,
 
