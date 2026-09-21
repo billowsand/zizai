@@ -77,6 +77,7 @@ Disabled / Loading / Idle → Recording → Recognizing → Ready
 
 - 快捷键配置放 `[shortcut] voice`，首版支持单个物理键，缺省 `right_alt`；`off` 关闭。
 - TSF 的 `OnTestKeyDown` / `OnKeyDown` 和 `OnTestKeyUp` / `OnKeyUp` 单独处理语音键，不把它硬塞进普通 `KeyEvent`；动作在 KeyUp 切换，以兼容只向 TSF 交付右 Alt 松开事件的应用。
+- 按住语音键期间按过别的键，松手不触发：右 Alt / 右 Ctrl 同时也是用户的组合键，不能让「右 Alt + 某键」顺带开一次录音。
 - 没在录音时沿用 320 ms 的状态同步；录音、识别或待确认期间按现有 80 ms 定时器同步。
 - 语音 IPC 或模型加载不进入 `OnKeyDown` 同步热路径；按键回调只发一条有界消息。
 

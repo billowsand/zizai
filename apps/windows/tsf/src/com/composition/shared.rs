@@ -41,6 +41,9 @@ pub(crate) struct Shared {
     /// 且按键状态已经清掉；单独记住按下，才能稳定吃掉对应 KeyUp 并发送 Stop。
     voice_key_held: Cell<bool>,
 
+    /// 语音触发键按住期间还按了别的键：这次是把它当组合键用（右 Alt + 某键），松手不该开录音。
+    voice_key_combo: Cell<bool>,
+
     /// 已申请编辑会话、尚未完成写入的听写请求，防止重复申请。
     voice_queued: Cell<Option<u64>>,
 
@@ -64,6 +67,7 @@ impl Shared {
             voice_trigger: Cell::new(VoiceTrigger::Off),
             voice_active: Cell::new(false),
             voice_key_held: Cell::new(false),
+            voice_key_combo: Cell::new(false),
             voice_queued: Cell::new(None),
             voice_committed: Cell::new(None),
             client,
@@ -100,6 +104,15 @@ impl Shared {
 
     pub(crate) fn set_voice_key_held(&self, value: bool) {
         self.voice_key_held.set(value);
+    }
+
+    pub(crate) fn note_voice_key_combo(&self) {
+        self.voice_key_combo.set(true);
+    }
+
+    /// 取走「这次是组合键」的记号，顺手清零，下一次按下从干净状态开始。
+    pub(crate) fn take_voice_key_combo(&self) -> bool {
+        self.voice_key_combo.replace(false)
     }
 
     pub(crate) fn voice_queued(&self) -> Option<u64> {

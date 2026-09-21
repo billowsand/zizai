@@ -69,6 +69,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         }
         if self.voice_key_down(vk, lparam) {
             self.shared.set_voice_key_held(true);
+            self.shared.take_voice_key_combo();
             log(&format!(
                 "语音快捷键按下（等待松开触发） trigger={:?} vk=0x{vk:02X} extended={}",
                 self.shared.voice_trigger(),
@@ -100,6 +101,11 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         }
         if self.voice_key_up(vk, lparam) {
             self.shared.set_voice_key_held(false);
+            // 按住期间敲过别的键：这是「右 Alt + 某键」的组合用法，松手只收尾，不开录音。
+            if self.shared.take_voice_key_combo() {
+                log("语音快捷键被当作组合键使用，不触发录音");
+                return Ok(true.into());
+            }
             let now = Instant::now();
             if is_debounced(self.last_voice_toggle.get(), now) {
                 log("语音快捷键重复触发已忽略");
@@ -228,6 +234,10 @@ impl TextService_Impl {
     }
 
     fn note_key_down(&self, vk: u32, lparam: LPARAM) {
+        // 语音键自己的按下与系统自动重复不算组合；别的键按下才算。
+        if self.shared.voice_key_held() && !self.voice_key_down(vk, lparam) {
+            self.shared.note_voice_key_combo();
+        }
         self.shift_tap.key_down(vk, lparam);
     }
 
