@@ -9,6 +9,7 @@ use windows::core::{IUnknownImpl, Interface, Ref, Result};
 use qingjian_platform::protocol::SessionId;
 
 use super::{ACTIVE, TextService_Impl};
+use crate::com::key_metrics;
 use crate::com::log::log;
 use crate::com::poll::PollTimer;
 use crate::com::profile;
@@ -65,6 +66,9 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
         self.shared.reset();
         self.shared.take_server_stale();
         self.shared.set_foreground(false);
+        if let Some(summary) = key_metrics::drain_summary() {
+            log(&summary);
+        }
         log("字在 TSF 已停用");
         Ok(())
     }

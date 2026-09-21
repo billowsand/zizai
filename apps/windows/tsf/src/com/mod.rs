@@ -13,6 +13,7 @@ pub(crate) mod display_attribute;
 pub(crate) mod edit;
 pub(crate) mod factory;
 pub(crate) mod key;
+pub(crate) mod key_metrics;
 pub(crate) mod log;
 pub(crate) mod mode;
 pub(crate) mod poll;

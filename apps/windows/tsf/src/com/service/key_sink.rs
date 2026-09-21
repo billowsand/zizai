@@ -20,6 +20,7 @@ use crate::client::mismatch;
 use crate::com::composition::preedit_string;
 use crate::com::edit::request_voice_anchor;
 use crate::com::key::event::{digit_key, is_edit, is_letter, is_nav, to_key_event};
+use crate::com::key_metrics;
 use crate::com::log::log;
 
 const VOICE_TOGGLE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(350);
@@ -271,7 +272,10 @@ impl TextService_Impl {
         if !self.would_eat(&event) {
             return false;
         }
-        self.forward_key(pic, event)
+        let started = Instant::now();
+        let handled = self.forward_key(pic, event);
+        key_metrics::record(started.elapsed());
+        handled
     }
 
     /// 把按键送给 Server 并按结果更新文档；返回吃不吃。
@@ -305,18 +309,6 @@ impl TextService_Impl {
                     let preedit = preedit_string(&response.frame);
                     self.shared.set_composing(!response.frame.is_empty());
                     let consumed = matches!(response.outcome, KeyOutcome::Consumed);
-                    let m = event.modifiers;
-                    log(&format!(
-                        "收键 vk={} ctrl={} alt={} shift={} caps={} en={} char={:?} candidates={} preedit={preedit:?} consumed={consumed}",
-                        event.virtual_key,
-                        m.ctrl,
-                        m.alt,
-                        m.shift,
-                        m.caps,
-                        m.english_mode,
-                        event.character,
-                        response.frame.candidates.items.len()
-                    ));
                     Next::Document {
                         commit: response.commit,
                         preedit,
