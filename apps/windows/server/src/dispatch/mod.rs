@@ -83,7 +83,11 @@ pub struct Router {
     /// 应用退出不影响它：状态条是桌面常驻的，只跟「当前输入法是不是青简」走。
     status_mode: Option<bool>,
 
-    /// 状态条上点出来、还没被 DLL 用 `SyncMode` 取走的目标模式。
+    /// 状态条显示的是哪个会话的模式：最近报过 `ModeChanged` 的那个（DLL 在获焦时报）。
+    /// `pending_mode` 只交给它，别的会话来问一律拿不到。
+    status_session: Option<SessionId>,
+
+    /// 状态条上点出来、还没被归属会话用 `SyncMode` 取走的目标模式。
     pending_mode: Option<bool>,
 
     /// 聚焦会话最近报来的光标矩形；重排结果异步到达时按它原地重摆候选窗口。
@@ -136,6 +140,7 @@ impl Router {
             candidates: Box::new(NoopSink),
             status: Box::new(NoopStatusSink),
             status_mode: None,
+            status_session: None,
             pending_mode: None,
             last_rect: None,
             last_shown: None,

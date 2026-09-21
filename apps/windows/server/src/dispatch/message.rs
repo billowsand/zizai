@@ -85,7 +85,7 @@ impl Router {
             }
             ClientMessage::ModeChanged { session, english } => {
                 tracing::debug!(?session, english, "中英模式");
-                self.handle_mode_changed(english);
+                self.handle_mode_changed(session, english);
                 None
             }
             ClientMessage::SyncMode { session } => {
@@ -93,7 +93,7 @@ impl Router {
                 self.reconcile_voice(session, &voice);
                 Some(ServerMessage::ModeSync {
                     session,
-                    english: self.take_pending_mode(),
+                    english: self.take_pending_mode(session),
                     voice,
                 })
             }
@@ -124,6 +124,7 @@ impl Router {
             }
             ClientMessage::CloseSession { session } => {
                 self.voice.cancel_for(session);
+                self.forget_status_session(session);
                 self.sessions.remove(&session);
                 if self.focused == Some(session) {
                     self.reset_composition();
@@ -138,6 +139,7 @@ impl Router {
 
     fn handle_key(&mut self, session: SessionId, event: KeyEvent) -> ServerMessage {
         self.ensure_focus(session);
+        self.claim_status_session(session);
         self.notice = None;
         let (commit, outcome) = match self.apply_key(&event) {
             Effect::Changed(commit) => {

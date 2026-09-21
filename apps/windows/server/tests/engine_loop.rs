@@ -612,6 +612,106 @@ fn status_bar_mode_click_is_handed_to_dll_via_sync_mode() {
     );
 }
 
+/// 每个激活了 TSF 的进程都在按同一节拍问 `SyncMode`，而且好几个会同时自认在前台：
+/// 点一下状态条只能切换状态条正显示的那个会话，不能被后台应用抢走。
+#[test]
+fn status_bar_mode_click_only_reaches_the_session_it_shows() {
+    const OTHER: SessionId = SessionId(77);
+
+    let config = RouterConfig {
+        status_enabled: true,
+        ..RouterConfig::default()
+    };
+    let mut router = router_with(config);
+    router.handle(ClientMessage::ModeChanged {
+        session: SESSION,
+        english: false,
+    });
+    router.handle_status_event(StatusEvent::ToggleMode);
+
+    // 后台应用抢先问到：不给它。
+    assert_eq!(
+        router.handle(ClientMessage::SyncMode { session: OTHER }),
+        Some(ServerMessage::ModeSync {
+            session: OTHER,
+            english: None,
+            voice: Default::default(),
+        })
+    );
+    assert_eq!(
+        router.handle(ClientMessage::SyncMode { session: SESSION }),
+        Some(ServerMessage::ModeSync {
+            session: SESSION,
+            english: Some(true),
+            voice: Default::default(),
+        })
+    );
+}
+
+/// 归属换人（用户切到别的应用，那边获焦时报自己的模式）：上一个应用没取走的点击作废，
+/// 不能隔着应用补切一次。
+#[test]
+fn a_pending_click_expires_when_the_status_bar_changes_owner() {
+    const OTHER: SessionId = SessionId(78);
+
+    let mut router = router();
+    router.handle(ClientMessage::ModeChanged {
+        session: SESSION,
+        english: false,
+    });
+    router.handle_status_event(StatusEvent::ToggleMode);
+    router.handle(ClientMessage::ModeChanged {
+        session: OTHER,
+        english: false,
+    });
+
+    assert_eq!(
+        router.handle(ClientMessage::SyncMode { session: OTHER }),
+        Some(ServerMessage::ModeSync {
+            session: OTHER,
+            english: None,
+            voice: Default::default(),
+        })
+    );
+}
+
+/// 后台应用启动时也会上报一次模式（TSF 激活即上报），但用户在哪打字才算数。
+#[test]
+fn typing_takes_the_status_bar_back_from_a_background_session() {
+    const BACKGROUND: SessionId = SessionId(79);
+
+    let mut router = router();
+    router.handle(ClientMessage::ModeChanged {
+        session: SESSION,
+        english: false,
+    });
+    router.handle(ClientMessage::ModeChanged {
+        session: BACKGROUND,
+        english: false,
+    });
+    press(&mut router, letter_with('a', Default::default()));
+    router.handle_status_event(StatusEvent::ToggleMode);
+
+    assert_eq!(
+        router.handle(ClientMessage::SyncMode {
+            session: BACKGROUND
+        }),
+        Some(ServerMessage::ModeSync {
+            session: BACKGROUND,
+            english: None,
+            voice: Default::default(),
+        })
+    );
+    assert_eq!(
+        router.handle(ClientMessage::SyncMode { session: SESSION }),
+        Some(ServerMessage::ModeSync {
+            session: SESSION,
+            english: Some(true),
+            voice: Default::default(),
+        })
+    );
+}
+
 #[test]
 fn chinese_punctuation_is_full_width_only_when_not_composing() {
     let mut router = router();

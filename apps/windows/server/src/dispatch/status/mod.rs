@@ -1,6 +1,7 @@
 //! 悬浮状态条：中英模式只在 DLL 侧，DLL 用 `ModeChanged` 推来（激活 / 获焦 / 切换时）；
 //! 切成别的输入法时 DLL 发 `ImeSwitched` 收起。会话关闭（应用退出）不收——状态条常驻桌面。
-//! 状态条上的点击经 [`StatusEvent`] 回到这里：切模式记成 `pending_mode` 等 DLL 用 `SyncMode` 来取，
+//! 状态条上的点击经 [`StatusEvent`] 回到这里：切模式记成 `pending_mode` 等**状态条归属的那个会话**
+//! 用 `SyncMode` 来取（所有激活了 TSF 的进程都在问，见 [`Router::take_pending_mode`]），
 //! 切标点 / 拖动写回配置文件（热加载会再读回来）。
 
 mod event;
@@ -8,6 +9,7 @@ mod sink;
 mod view;
 
 use qingjian_platform::Config;
+use qingjian_platform::protocol::SessionId;
 
 pub use self::event::StatusEvent;
 pub use self::sink::{NoopStatusSink, StatusSink};
@@ -15,18 +17,52 @@ pub use self::view::StatusView;
 use super::Router;
 
 impl Router {
-    pub(super) fn handle_mode_changed(&mut self, english: bool) {
+    /// DLL 报来自己的模式（激活、获焦、切换时各一次）：状态条显示它，归属也转到它名下。
+    pub(super) fn handle_mode_changed(&mut self, session: SessionId, english: bool) {
+        if self.status_session != Some(session) {
+            // 换了归属：上一个应用没取走的那次点击作废，别隔着应用补切一次。
+            self.pending_mode = None;
+            self.status_session = Some(session);
+        }
         self.status_mode = Some(english);
         self.reconcile_status();
     }
 
     pub(super) fn handle_ime_switched(&mut self) {
         self.status_mode = None;
+        self.status_session = None;
+        self.pending_mode = None;
         self.reconcile_status();
     }
 
-    /// DLL 来取状态条上点出的目标模式；取走即清。
-    pub(super) fn take_pending_mode(&mut self) -> Option<bool> {
+    /// 有键落到这个会话 = 用户确实在这里打字，状态条的归属转过来。
+    /// 后台应用启动时也会上报一次模式（`Activate` 里就报），不能让它一直霸着点击的去向。
+    pub(super) fn claim_status_session(&mut self, session: SessionId) {
+        if self.status_session == Some(session) {
+            return;
+        }
+        self.status_session = Some(session);
+        self.pending_mode = None;
+    }
+
+    /// 归属会话退出：没人来取的那次点击作废，状态条本身留着（它是桌面常驻的）。
+    pub(super) fn forget_status_session(&mut self, session: SessionId) {
+        if self.status_session == Some(session) {
+            self.status_session = None;
+            self.pending_mode = None;
+        }
+    }
+
+    /// 状态条归属的会话来取点出的目标模式；取走即清。
+    ///
+    /// **只给归属会话。** 每个激活了 TSF 的进程都在按同一个节拍问，而跨进程的
+    /// `OnSetFocus(FALSE)` 并不可靠，好几个进程会同时自认在前台：不认会话的话，
+    /// 这一次点击就是谁先问到谁切，前台应用反而切不动（2026-09-21 真机日志里
+    /// 连点四下落在四个不同 pid 上）。
+    pub(super) fn take_pending_mode(&mut self, session: SessionId) -> Option<bool> {
+        if self.status_session != Some(session) {
+            return None;
+        }
         self.pending_mode.take()
     }
 
