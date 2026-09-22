@@ -78,10 +78,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let shadow = (!args.no_shadow).then_some(Shadow::mac_panel());
 
-    let scenes: [(&str, Frame); 5] = [
+    let scenes: [(&str, Frame); 6] = [
         ("nihao", nihao()),
         ("nihao-sentence", nihao_with_sentence()),
         ("cloud", cloud()),
+        ("local-sentence", local_sentence()),
         ("corrected", corrected_japanese()),
         ("probe", probe()),
     ];
@@ -248,6 +249,23 @@ fn cloud() -> Frame {
     frame
 }
 
+/// 本地整句候选排第一：词后右上角带星标。
+fn local_sentence() -> Frame {
+    let mut frame = nihao();
+    frame.preedit = Some(Preedit::plain("wo'xiang'qu'bei'jing", 20));
+    frame.rows = vec![
+        Row {
+            sentence: true,
+            ..Row::plain(0, "我想去北京")
+        },
+        Row::plain(1, "我想"),
+        Row::plain(2, "我"),
+        Row::plain(3, "窝"),
+    ];
+    frame.footer = None;
+    frame
+}
+
 /// 纠错后的拼音行（删除线 + 淡色剩余）加日文译词（汉字注假名）。
 fn corrected_japanese() -> Frame {
     Frame {
@@ -322,5 +340,6 @@ fn annotated(index: usize, text: &str, annotation: &[(&str, Tone)], cloud: bool)
             .map(|(s, tone)| ((*s).to_owned(), *tone))
             .collect(),
         cloud,
+        sentence: false,
     }
 }

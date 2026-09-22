@@ -16,6 +16,7 @@ use crate::error::RenderError;
 use crate::fonts::FontLibrary;
 use crate::frame::{Frame, Row, Tone};
 use crate::shadow::Shadow;
+use crate::sparkle::draw_sparkle;
 use crate::text::{TextPainter, TextSize, TextStyle};
 use crate::theme::{FontSpec, Theme};
 
@@ -30,6 +31,12 @@ const CLOUD_SIZE: f32 = 13.0;
 
 /// 云朵与后面文字的间距（点）。
 const CLOUD_GAP: f32 = 4.0;
+
+/// 整句星标边长（点）。
+const SPARKLE_SIZE: f32 = 7.0;
+
+/// 整句星标与前面候选词的间距（点）。
+const SPARKLE_GAP: f32 = 1.5;
 
 /// preedit 与右侧整句补全之间的间距（点）。
 const SENTENCE_GAP: f32 = 16.0;
@@ -112,6 +119,11 @@ impl Metrics<'_> {
     /// 云朵图标占的宽度（含后面的间距）。
     fn cloud_width(&self) -> f32 {
         self.px(CLOUD_SIZE + CLOUD_GAP)
+    }
+
+    /// 整句星标占的宽度（含前面的间距）。
+    fn sparkle_width(&self) -> f32 {
+        self.px(SPARKLE_GAP + SPARKLE_SIZE)
     }
 }
 
@@ -223,7 +235,7 @@ impl Renderer {
         m.cloud_width()
     }
 
-    /// 候选词本体：云端词前带云朵、换颜色。
+    /// 候选词本体：云端词前带云朵、换颜色；整句候选词后右上角带星标。
     fn draw_word(
         &mut self,
         canvas: &mut Canvas,
@@ -243,7 +255,17 @@ impl Renderer {
             m.theme.colors.text
         };
         let style = m.style(m.theme.text_font, color);
-        self.draw_text(canvas, &row.text, &style, word_x, top);
+        word_x += self.draw_text(canvas, &row.text, &style, word_x, top);
+        if row.sentence {
+            // 与字形顶部大致齐平：行框里字形垂直居中，顶上留出的空按行高的一成半估
+            draw_sparkle(
+                canvas,
+                word_x + m.px(SPARKLE_GAP),
+                top + text_height * 0.15,
+                m.px(SPARKLE_SIZE),
+                m.theme.colors.accent,
+            );
+        }
     }
 
     fn fill_highlight(

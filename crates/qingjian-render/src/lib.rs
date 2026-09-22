@@ -16,6 +16,7 @@ mod frame;
 mod gear;
 mod renderer;
 mod shadow;
+mod sparkle;
 mod text;
 mod theme;
 mod voice;

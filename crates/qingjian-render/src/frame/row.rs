@@ -15,6 +15,9 @@ pub struct Row {
 
     /// 来自云联想：词前画一个小云朵，与本地候选区分。
     pub cloud: bool,
+
+    /// 本地整句模型拼出的整句：词后右上角画一个小星标，与词库里现成的词区分。
+    pub sentence: bool,
 }
 
 impl Row {
@@ -25,6 +28,7 @@ impl Row {
             text: text.into(),
             annotation: Vec::new(),
             cloud: false,
+            sentence: false,
         }
     }
 }
