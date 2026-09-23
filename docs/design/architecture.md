@@ -321,6 +321,8 @@ CC-CEDICT 表（`dict-convert cedict`）保留为备用来源，覆盖面广但�
   协议不耦合 Core 内部枚举），候选直接嵌 `qingjian_core::CandidateList`。同词干类型收进子目录：`key/{event,outcome}`、`frame/preedit/{kind,segment}`。
 - **Server 进程**：`apps/windows/server`（package `qingjian-windows-server`，bin `qingjian-server`）。`dispatch::Router` 按 `SessionId` 分派多会话（Windows 一个 Server 服务多个应用进程，
   每会话各持组句状态）。会话开 / 关、按键与上屏、Engine 装配、命名管道传输（`\\.\pipe\qingjian`）都已跑通，Windows 上端到端测过。
+  Server 单实例：管道第一个实例带 `FILE_FLAG_FIRST_PIPE_INSTANCE`；建不出时不是直接退出，而是往会话内接管事件发一次信号、等现任让位后接管
+  （现任是老版本就等到超时按老行为退出）。**UI 起不来（或 UI 线程中途死掉）的 Server 直接退出、不占管道**，免得变成「能打字、没窗口」且谁也接管不了的状态。
 - **语音 Worker**：`apps/windows/voice-worker`（bin `qingjian-voice-worker`）只在 `[voice] enabled` 时由 Server 启动；
   `crates/qingjian-voice` 抽取 auto-voice 的 SenseVoice、麦克风与 16 kHz 重采样实现（MIT），移除全局键盘钩子、剪贴板、模拟粘贴、托盘与 LLM。
   Server 与 Worker 用长度前缀 JSON 的 stdio 私有协议通信；TSF 的语音键按下 / 松开经 Server 绑定到 `SessionId`，最终文本通过异步编辑会话直写并在成功后 ACK。

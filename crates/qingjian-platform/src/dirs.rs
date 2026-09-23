@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 /// 用户数据目录 `%APPDATA%\Qingjian`。
 pub fn user_dir() -> Option<PathBuf> {
-    std::env::var_os("APPDATA").map(|base| PathBuf::from(base).join("Qingjian"))
+    roaming_base().map(|base| base.join("Qingjian"))
 }
 
 /// 配置文件 `%APPDATA%\Qingjian\config.toml`。
@@ -22,5 +22,24 @@ pub fn config_path() -> Option<PathBuf> {
 
 /// 运行日志目录 `%LOCALAPPDATA%\Qingjian\logs`，不负责创建。
 pub fn log_dir() -> Option<PathBuf> {
-    std::env::var_os("LOCALAPPDATA").map(|base| PathBuf::from(base).join("Qingjian").join("logs"))
+    local_base().map(|base| base.join("Qingjian").join("logs"))
+}
+
+/// 漫游基目录：`%APPDATA%`，缺失时（进程环境被剥离，例如提权 / 安装器 ShellExecute 拉起）回落
+/// `%USERPROFILE%\AppData\Roaming`。日志与配置据此定位，环境不全也不至于既不写日志又不读配置。
+fn roaming_base() -> Option<PathBuf> {
+    std::env::var_os("APPDATA").map(PathBuf::from).or_else(|| {
+        std::env::var_os("USERPROFILE")
+            .map(|profile| PathBuf::from(profile).join("AppData").join("Roaming"))
+    })
+}
+
+/// 本机基目录：`%LOCALAPPDATA%`，缺失时回落 `%USERPROFILE%\AppData\Local`。
+fn local_base() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .map(|profile| PathBuf::from(profile).join("AppData").join("Local"))
+        })
 }

@@ -253,25 +253,45 @@ fn grant_appcontainer_log_access() {
     }
 }
 
-/// 起 UI 线程作为候选窗口 / 状态条的输出端（失败退化为不画），再在命名管道上服务到进程结束。
+/// 起 UI 线程作为候选窗口 / 状态条的输出端，再在命名管道上服务到进程结束。
+///
+/// **UI 起不来就退出，不占管道**：否则会变成一个「能打字、没窗口」的 Server——它握着独占的
+/// `\\.\pipe\qingjian`，后来启动的 Server 全在建实例时被拒、直接退出，用户永远等不到窗口。
+/// 退出后由下一个 Server（TSF DLL 连不上时自拉 / 登录启动项）接手，窗口自然就回来了。
 #[cfg(windows)]
 fn serve(mut router: Router) {
+    use std::time::Duration;
+
     use qingjian_windows_server::ipc::{Work, pipe};
     use qingjian_windows_server::ui::UiHandle;
     grant_appcontainer_log_access();
-    // 工人循环的活：各连接的消息 + 状态条上的操作（UI 线程投进来）。
+    // 工人循环的活：各连接的消息 + 状态条上的操作（UI 线程投进来）+ 收尾退出。
     let (work_tx, work_rx) = std::sync::mpsc::channel::<Work>();
     let status_events = work_tx.clone();
     let on_status = Box::new(move |event| {
         let _ = status_events.send(Work::Status(event));
     });
-    match UiHandle::spawn(on_status) {
-        Ok(ui) => {
-            router.set_candidate_sink(Box::new(ui.clone()));
-            router.set_status_sink(Box::new(ui));
+    let ui = match UiHandle::spawn(on_status) {
+        Ok(ui) => ui,
+        Err(error) => {
+            tracing::error!(%error, "UI 线程启动失败，退出让下一个 Server 接手（不占管道）");
+            std::process::exit(1);
         }
-        Err(error) => tracing::error!(%error, "UI 线程启动失败，将不显示候选框 / 状态条"),
-    }
+    };
+    router.set_candidate_sink(Box::new(ui.clone()));
+    router.set_status_sink(Box::new(ui.clone()));
+    // UI 线程中途死掉（消息循环出错 / panic）：本进程也退出，同样别占着管道。
+    let health = ui;
+    let shutdown = work_tx.clone();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            if !health.is_alive() {
+                let _ = shutdown.send(Work::StepDown);
+                break;
+            }
+        }
+    });
     if let Err(error) = pipe::serve_pipe(pipe::DEFAULT_PIPE_NAME, &mut router, work_tx, work_rx) {
         tracing::error!(%error, "命名管道服务退出");
         std::process::exit(1);

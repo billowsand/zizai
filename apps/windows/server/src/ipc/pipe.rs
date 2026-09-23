@@ -6,10 +6,10 @@
 
 use std::fs::File;
 use std::io;
-use std::os::windows::io::{AsRawHandle, FromRawHandle};
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_PIPE_CONNECTED, HANDLE};
 use windows::Win32::Security::Authorization::{
@@ -21,6 +21,7 @@ use windows::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE,
     PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
+use windows::Win32::System::Threading::{CreateEventW, INFINITE, SetEvent, WaitForSingleObject};
 use windows::core::{HRESULT, HSTRING};
 
 use qingjian_platform::protocol::{
@@ -38,10 +39,34 @@ const BUFFER_SIZE: u32 = 64 * 1024;
 /// 完整性标 Low。任务栏搜索、设置这类 AppContainer 进程在默认 DACL 下连不上。
 const PIPE_SDDL: &str = "D:(A;;GA;;;WD)(A;;GA;;;AC)(A;;GA;;;S-1-15-2-2)S:(ML;;NW;;;LW)";
 
+/// 接管事件名前缀（会话内）。新起的 Server 发现管道被占时 `SetEvent` 请现任让位；现任收到就收尾退出，
+/// 把管道让出去。用命名事件而不是往管道里发协议消息：不动 DLL ↔ Server 的线上协议，纯 Server 侧。
+/// `Local\` 前缀 = 本登录会话，与管道一样是每会话一个。完整名字由 [`step_down_event_name`] 拼出。
+const STEP_DOWN_EVENT_PREFIX: &str = "Qingjian.ServerStepDown";
+
+/// 请求接管后等现任让位的上限。现任收尾（学习数据落盘 + 退出）一般几十毫秒；给足余量，超时按
+/// 「管道真被占着」失败。
+const STEP_DOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// 接管事件名：跟着管道名走，不同管道（测试 / 开发各用各的）互不打扰。管道名里的非法字符（`\` 等）
+/// 换成 `_`。返回带 `Local\` 前缀的完整名字，可直接给 `CreateEventW` / `SetEvent` 用。
+pub fn step_down_event_name(pipe_name: &str) -> String {
+    let suffix: String = pipe_name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    format!(r"Local\{STEP_DOWN_EVENT_PREFIX}.{suffix}")
+}
+
 /// 在命名管道上服务多个客户端。当前线程独占 [`Router`] 跑工人循环，正常不返回。
 /// `work` 通道由调用方建（UI 线程也往里投状态条事件），这里拿一份发送端给各连接。
-/// 第一个实例带 `FILE_FLAG_FIRST_PIPE_INSTANCE`：已有一个 Server 在跑就建不出来，直接报错退出（两个 Server
+/// 第一个实例带 `FILE_FLAG_FIRST_PIPE_INSTANCE`：已有一个 Server 在跑就建不出来（两个 Server
 /// 会各画一条状态条、各持一份状态）。
+///
+/// 建不出来时不再直接退出，而是**请现任让位再接管**：往 [`step_down_event_name`] 那个事件发一次
+/// 信号，等管道空出来再抢。这样即使现任是个「能打字、画不出窗口」的坏实例（UI 起不来 / 窗口建在了
+/// 看不见的地方 / UI 线程后来死了），新起的 Server 也能把它顶掉，不必让用户手动结束进程。现任是
+/// 老版本、不认识这个事件时，一路等到超时，退回原来的「管道被占就退出」。
 pub fn serve_pipe(
     name: &str,
     router: &mut Router,
@@ -49,15 +74,30 @@ pub fn serve_pipe(
     receiver: Receiver<Work>,
 ) -> io::Result<()> {
     let pipe = HSTRING::from(name);
-    let first = match create_instance(&pipe, pipe_security_descriptor(), true) {
+    // 接管事件先于管道建：新 Server 看到管道被占时才有对象可发信号。
+    let step_down = create_step_down_event(name);
+    let descriptor = pipe_security_descriptor();
+    let first = match create_instance(&pipe, descriptor, true) {
         Ok(first) => first,
         Err(error) if error.raw_os_error() == Some(ERROR_ACCESS_DENIED.0 as i32) => {
-            return Err(io::Error::other(
-                "已有一个 qingjian-server 在运行（命名管道被占），本进程退出",
-            ));
+            if let Some(handle) = &step_down {
+                let _ = unsafe { SetEvent(HANDLE(handle.as_raw_handle())) };
+                tracing::info!("已有一个 qingjian-server，已请求它让位");
+            }
+            acquire_first_with_retry(&pipe, descriptor).map_err(|_| {
+                io::Error::other("已有一个 qingjian-server 在运行（命名管道被占），本进程退出")
+            })?
         }
         Err(error) => return Err(error),
     };
+    // 本进程成为 Server：起一条线程等接管信号（后来者 SetEvent 时退出，把管道让出去）。
+    if let Some(handle) = step_down {
+        let watcher = sender.clone();
+        thread::spawn(move || {
+            let _ = unsafe { WaitForSingleObject(HANDLE(handle.as_raw_handle()), INFINITE) };
+            let _ = watcher.send(Work::StepDown);
+        });
+    }
     thread::spawn(move || accept_loop(&pipe, first, sender));
     tracing::info!(pipe = name, "命名管道监听中");
     // 按 Router 的节拍来 tick：在等本地整句模型就几十毫秒一次，否则一秒看一次配置文件。
@@ -76,13 +116,53 @@ pub fn serve_pipe(
                 let _ = reply.send(router.handle(message));
             }
             Ok(Work::Status(event)) => router.handle_status_event(event),
+            Ok(Work::StepDown) => {
+                tracing::info!("收到收尾信号（另一个 Server 请求接管 / UI 线程退出），退出让位");
+                break;
+            }
             Err(RecvTimeoutError::Timeout) => continue,
             Err(RecvTimeoutError::Disconnected) => break,
         }
         // 处理完消息节拍可能变短了（按键起了防抖）：到点时间只提前不推后
         due = due.min(Instant::now() + router.next_tick());
     }
+    // 让位前把学习数据落盘，别把这一段的输入丢掉。
+    router.flush_learning();
     Ok(())
+}
+
+/// 建（或打开）接管事件。描述符与管道同款（完整性标 Low）：高完整性 / AppContainer 的进程也能发信号，
+/// 否则提权起的 Server 建的事件，普通权限的新 Server 写不进去。
+fn create_step_down_event(pipe_name: &str) -> Option<OwnedHandle> {
+    let descriptor = pipe_security_descriptor();
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor.0,
+        bInheritHandle: false.into(),
+    };
+    let attributes = (!descriptor.0.is_null()).then_some(&raw const attributes);
+    let name = HSTRING::from(step_down_event_name(pipe_name));
+    let handle = unsafe { CreateEventW(attributes, false, false, &name) }
+        .inspect_err(|error| tracing::warn!(%error, "建接管事件失败，退回「管道被占就退出」"))
+        .ok()?;
+    Some(unsafe { OwnedHandle::from_raw_handle(handle.0) })
+}
+
+/// 让位请求发出后，轮询等管道空出来再抢第一个实例。超时（现任没让位 / 另有新 Server 先抢到）按失败。
+fn acquire_first_with_retry(name: &HSTRING, descriptor: PSECURITY_DESCRIPTOR) -> io::Result<File> {
+    let deadline = Instant::now() + STEP_DOWN_TIMEOUT;
+    loop {
+        match create_instance(name, descriptor, true) {
+            Ok(file) => return Ok(file),
+            Err(error)
+                if error.raw_os_error() == Some(ERROR_ACCESS_DENIED.0 as i32)
+                    && Instant::now() < deadline =>
+            {
+                thread::sleep(Duration::from_millis(100));
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 /// 先在建好的第一个实例上等客户端，之后每建一个实例、等一个客户端连上，就起一条线程服务它。建实例出错才停。

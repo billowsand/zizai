@@ -34,12 +34,21 @@ impl Canvas {
         };
         let mut bits = core::ptr::null_mut();
         let dib = unsafe { CreateDIBSection(None, &bmi, DIB_RGB_COLORS, &mut bits, None, 0)? };
-        let (memdc, previous) = unsafe {
-            let memdc = CreateCompatibleDC(None);
-            (memdc, SelectObject(memdc, dib.into()))
-        };
-        if bits.is_null() || memdc.is_invalid() {
+        // DC 必须先建好再判空：拿一个无效 HDC 调 SelectObject 会进 GDI 句柄表；
+        // 之后 Drop 时 `previous` 又被记成 NULL，再去 SelectObject(NULL) 第二次踩坑。
+        // 候选框与状态条共用同一个 Paint 的时候，GDI 状态错位会同时牵连两边——
+        // 表现是状态条能渲染但贴错位 / 候选框 present 被拒而隐身。
+        let memdc = unsafe { CreateCompatibleDC(None) };
+        if memdc.is_invalid() {
             unsafe {
+                let _ = DeleteObject(dib.into());
+            }
+            return Err(Error::from(E_FAIL));
+        }
+        let previous = unsafe { SelectObject(memdc, dib.into()) };
+        if bits.is_null() {
+            unsafe {
+                SelectObject(memdc, previous);
                 let _ = DeleteDC(memdc);
                 let _ = DeleteObject(dib.into());
             }

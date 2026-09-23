@@ -185,6 +185,20 @@ Server 没起来时 DLL 自己拉（`client/launch.rs`）：管道不在就 `She
 不如让字母直接进应用当英文打。协议对不上（本进程还加载着升级前的旧 DLL）时合上 `client/mismatch.rs` 的进程级闸：
 之后整键放行、不再连 Server、日志只记一次，重启这个应用即恢复。
 
+Server 的独占与接管（`ipc/pipe.rs`）：`\\.\pipe\qingjian` 第一个实例带 `FILE_FLAG_FIRST_PIPE_INSTANCE`，
+同一时刻只让一个 Server 持管道（两个会各画一条状态条、各持一份状态）。但**建不出第一个实例时不再直接退出**：
+先往会话内的接管事件 `Local\Qingjian.ServerStepDown.<管道名>`（`step_down_event_name` 按管道名派生，
+不同管道互不打扰）`SetEvent` 一次，现任的监听线程收到后工人循环收尾（`Work::StepDown`，先把学习数据落盘）
+退出，新 Server 再抢管道接管。用命名事件而非协议消息，不动 DLL ↔ Server 的线上协议；事件描述符与管道同款
+（完整性标 Low），提权起的 Server 建的事件普通权限也写得进。现任是老版本、不认识这个事件时等到超时，
+退回原来的「管道被占就退出」。
+
+配套的自我保护（`main.rs::serve`）：**UI 起不来就 `exit`，不占管道**；UI 线程中途死掉（`UiHandle::is_alive`
+转假）也退出。否则会变成「能打字、没窗口」的 Server——它握着独占管道，后来启动的 Server 全被拒，用户永远
+等不到候选窗与状态条。2026-09-23 真机踩过：一次提权上下文（环境被剥离、连 `LOCALAPPDATA` 都没有）拉起的
+Server 建不出窗口又占着管道，卡了二十分钟。`dirs.rs` 的日志 / 配置目录也加了 `%USERPROFILE%` 回落，环境不全
+时至少还能写日志、读配置。
+
 ## assets
 
 - `assets/sample/`：手写样例词库与释义表，不是产品数据。

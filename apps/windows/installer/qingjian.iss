@@ -259,14 +259,17 @@ begin
 end;
 
 { 起一次 Server。uiAccess=true 的 exe 不能用 CreateProcess / runasoriginaluser 拉起（报 740），
-  必须以原（非提升）用户身份 ShellExecute（等同双击），AppInfo 才会授予 uiAccess 高 z-band 权限。 }
+  必须以原（非提升）用户身份 ShellExecute（等同双击），AppInfo 才会授予 uiAccess 高 z-band 权限。
+  拉不起来（没有原始用户令牌）只记日志：Server 现在 UI 起不来会自己退出、不占管道，
+  TSF DLL 首次按键与登录启动项都会补拉，不会卡成「能打字、没窗口」。 }
 procedure StartServer;
 var
   ErrorCode: Integer;
 begin
-  ShellExecAsOriginalUser(
+  if not ShellExecAsOriginalUser(
     '', ExpandConstant('{app}\qingjian-server.exe'), '', ExpandConstant('{app}'),
-    SW_SHOWNORMAL, ewNoWait, ErrorCode);
+    SW_SHOWNORMAL, ewNoWait, ErrorCode) then
+    Log('以原用户 ShellExecute 拉起 Server 失败，登录启动项 / TSF DLL 会补拉');
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);

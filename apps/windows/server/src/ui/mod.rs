@@ -14,6 +14,8 @@ mod window_class;
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
@@ -51,6 +53,10 @@ pub struct UiHandle {
 
     /// UI 线程 id，`PostThreadMessageW` 用。
     thread_id: u32,
+
+    /// UI 线程是否还在跑（窗口建好置真，线程退出置假）。Server 靠它判断「还能不能画」：
+    /// 不能画就退出，别占着独占管道变成「能打字、没窗口」且谁也接管不了的状态。
+    alive: Arc<AtomicBool>,
 }
 
 impl UiHandle {
@@ -59,17 +65,25 @@ impl UiHandle {
         // 用 Option<u32> 而非 Result 回报，免得 windows Error 跨线程。
         let (ready_tx, ready_rx) = mpsc::channel::<Option<u32>>();
         let (command_tx, command_rx) = mpsc::channel::<UiCommand>();
+        let alive = Arc::new(AtomicBool::new(false));
+        let thread_alive = alive.clone();
         thread::Builder::new()
             .name("qingjian-candidates".to_owned())
-            .spawn(move || run(command_rx, &ready_tx, on_status))
+            .spawn(move || run(command_rx, &ready_tx, on_status, thread_alive))
             .map_err(|_| Error::from(E_FAIL))?;
         match ready_rx.recv() {
             Ok(Some(thread_id)) => Ok(Self {
                 sender: command_tx,
                 thread_id,
+                alive,
             }),
             _ => Err(Error::from(E_FAIL)),
         }
+    }
+
+    /// UI 线程是否还在跑（窗口是否还能画）。线程没起或已退出为 `false`。
+    pub fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::Relaxed)
     }
 
     /// 线程已退出（通道断）时静默丢弃。
@@ -131,8 +145,23 @@ pub(super) fn module_handle() -> HINSTANCE {
     HINSTANCE(module.0)
 }
 
+/// 线程退出（含 panic 展开）时把存活标记清掉。
+struct AliveGuard(Arc<AtomicBool>);
+
+impl Drop for AliveGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Relaxed);
+    }
+}
+
 /// UI 线程主体：建窗口、报回线程 id、跑消息循环。
-fn run(commands: Receiver<UiCommand>, ready: &Sender<Option<u32>>, on_status: StatusEvents) {
+fn run(
+    commands: Receiver<UiCommand>,
+    ready: &Sender<Option<u32>>,
+    on_status: StatusEvents,
+    alive: Arc<AtomicBool>,
+) {
+    let _guard = AliveGuard(alive.clone());
     // 按物理像素定位，与应用报来的组句屏幕矩形对齐；已设过会失败，忽略。
     let _ = unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
     let thread_id = unsafe { GetCurrentThreadId() };
@@ -158,6 +187,7 @@ fn run(commands: Receiver<UiCommand>, ready: &Sender<Option<u32>>, on_status: St
             None
         }
     };
+    alive.store(true, Ordering::Relaxed);
     if ready.send(Some(thread_id)).is_err() {
         return;
     }
