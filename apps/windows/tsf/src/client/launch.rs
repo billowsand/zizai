@@ -10,21 +10,19 @@
 
 use std::path::PathBuf;
 
-use windows::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError};
-use windows::Win32::System::Threading::CreateMutexW;
+use windows::Win32::Foundation::{CloseHandle, E_ACCESSDENIED, ERROR_ALREADY_EXISTS, GetLastError};
+use windows::Win32::System::Threading::{CreateMutexW, OpenMutexW, SYNCHRONIZATION_SYNCHRONIZE};
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::core::{HSTRING, PCWSTR, w};
 
+use qingjian_platform::instance::{LAUNCH_MUTEX, instance_mutex_name, session_pipe_name};
+
+use super::host;
 use crate::com::log::log;
 
 /// Server 的 exe，与 DLL 装在同一个目录（见安装脚本的 `[Files]`）。
 const SERVER_EXE: &str = "qingjian-server.exe";
-
-/// 同一个登录会话里只让一个进程去拉 Server：每个应用进程里都有一份 DLL，切焦点时会接连发现连不上。
-/// 拉重了也不会有两个 Server（管道的 `FILE_FLAG_FIRST_PIPE_INSTANCE` 会让后起的那个退出），
-/// 但那会在日志里留一串没必要的错误。`Local\` 前缀 = 本登录会话，正合适：Server 本来就是每会话一个。
-const LAUNCH_MUTEX: &str = r"Local\Qingjian.ServerLaunch";
 
 /// 拉起 Server。**只负责把进程起出来**，管道要等一会儿才有（实测 ShellExecute 返回后约 120 ms），
 /// 由调用方轮询重连——不在这里等：`WaitNamedPipeW` 只能等「管道在、实例都忙」，
@@ -36,7 +34,18 @@ pub fn launch_server() {
     if cfg!(debug_assertions) {
         return;
     }
-    // 拿不到互斥体（AppContainer 里没有这个命名空间）就别拉了，那种进程也起不了 Program Files 里的 exe。
+    // 提权 / 服务账号 / 服务会话里的宿主拉起的 Server 会继承它的令牌与环境（见 [`host`]），宁可不拉。
+    if let Some(reason) = host::launch_refusal() {
+        log(&format!("{reason}，不拉 Server"));
+        return;
+    }
+    // Server 进程已经在了（正在装配、正在接管，管道一会儿就有）：别再拉一个。
+    if server_process_exists() {
+        return;
+    }
+    // 同一个登录会话里只让一个进程去拉（每个应用里都有一份 DLL，切焦点时会接连发现连不上）；
+    // 安装器在装的过程中也一直持有它，免得文件替换到一半时拉起旧 Server。
+    // 拿不到互斥体（AppContainer 里没有这个命名空间 / 安装器提权建的开不了）就别拉了。
     let Ok(mutex) = (unsafe { CreateMutexW(None, true, &HSTRING::from(LAUNCH_MUTEX)) }) else {
         return;
     };
@@ -47,6 +56,22 @@ pub fn launch_server() {
         }
     }
     let _ = unsafe { CloseHandle(mutex) };
+}
+
+/// 本会话的 Server 单实例互斥体在不在（Server 从启动到退出一直持有它）。开不了但它存在
+/// （例如另一个用户的）也算在，别去拉。
+fn server_process_exists() -> bool {
+    let Some(session) = host::session() else {
+        return false;
+    };
+    let name = HSTRING::from(instance_mutex_name(&session_pipe_name(session)));
+    match unsafe { OpenMutexW(SYNCHRONIZATION_SYNCHRONIZE, false, &name) } {
+        Ok(handle) => {
+            let _ = unsafe { CloseHandle(handle) };
+            true
+        }
+        Err(error) => error.code() == E_ACCESSDENIED,
+    }
 }
 
 /// 起一次 Server，返回拉起的路径。

@@ -140,34 +140,26 @@ fn unknown_client_message_keeps_the_connection() {
     assert!(matches!(message, ServerMessage::KeyResult { .. }));
 }
 
-/// 接管：新起的 Server 往接管事件发一次信号，现任的工人循环应收到 `StepDown` 并干净退出（`Ok`）。
-/// 这是「坏实例占着管道、新 Server 顶掉它」这条自愈路径的核心。
+/// 收尾：工人循环收到 `StepDown`（让位请求 / UI 线程死了）应落盘后干净返回（`Ok`），把管道让出去。
 #[test]
-fn step_down_signal_stops_the_running_server() {
-    use windows::Win32::Foundation::CloseHandle;
-    use windows::Win32::System::Threading::{CreateEventW, SetEvent};
-    use windows::core::HSTRING;
+fn step_down_work_stops_the_worker_loop() {
+    use qingjian_windows_server::ipc::Work;
 
     let name = format!(r"\\.\pipe\qingjian-test-stepdown-{}", std::process::id());
-    let event_name = qingjian_windows_server::ipc::pipe::step_down_event_name(&name);
-
+    let (work_tx, work_rx) = std::sync::mpsc::channel();
+    let step_down = work_tx.clone();
     let serve_name = name.clone();
     let running = thread::spawn(move || {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
         let engine = assembly::assemble(&AssemblySpec::new(root.join("assets/sample/dict.tsv")))
             .expect("assemble engine from sample data");
         let mut router = Router::new(engine, RouterConfig::default());
-        let (work_tx, work_rx) = std::sync::mpsc::channel();
         serve_pipe(&serve_name, &mut router, work_tx, work_rx)
     });
-    // 连上就说明现任已开始监听（接管事件此时也已建好）。
+    // 连上就说明已开始监听。
     let _client = connect(&name);
-
-    let event = unsafe { CreateEventW(None, false, false, &HSTRING::from(event_name)) }
-        .expect("open step-down event");
-    unsafe { SetEvent(event).expect("signal step-down") };
-    unsafe { CloseHandle(event).expect("close event") };
+    step_down.send(Work::StepDown).expect("worker loop alive");
 
     let result = running.join().expect("serve thread panicked");
-    assert!(result.is_ok(), "收到接管信号后现任应干净退出");
+    assert!(result.is_ok(), "收到收尾信号后应干净返回");
 }

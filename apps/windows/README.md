@@ -10,7 +10,7 @@ Windows 端是一个产品，运行时由轻量 DLL、Server 与可选启用的�
 
 ```
 应用进程 A ── qingjian_tsf.dll ─┐
-应用进程 B ── qingjian_tsf.dll ─┼─ 命名管道 \\.\pipe\qingjian ─▶ qingjian-server（唯一的 Engine）
+应用进程 B ── qingjian_tsf.dll ─┼─ 命名管道 \\.\pipe\qingjian.<会话号> ─▶ qingjian-server（唯一的 Engine）
 应用进程 C ── qingjian_tsf.dll ─┘
                                       └─ 私有 stdio ─▶ qingjian-voice-worker
 ```

@@ -187,6 +187,72 @@ Type: filesandordirs; Name: "{app}\assets\levels"
 Type: files; Name: "{app}\qingjian_tsf-*.dll"
 
 [Code]
+const
+  QJ_SYNCHRONIZE = $00100000;
+  QJ_MUTEX_MODIFY_STATE = $0001;
+  QJ_EVENT_MODIFY_STATE = $0002;
+  QJ_WAIT_OBJECT_0 = 0;
+  QJ_WAIT_ABANDONED = $80;
+  { 与 crates\qingjian-platform\src\instance.rs 手抄对齐（那边有测试盯着这两串）。 }
+  QJ_LAUNCH_MUTEX = 'Local\Qingjian.ServerLaunch';
+  QJ_INSTANCE_MUTEX = 'Local\Qingjian.Server.qingjian_';
+  QJ_STEP_DOWN_EVENT = 'Local\Qingjian.ServerStepDown.qingjian_';
+
+function QjOpenMutex(Access: Cardinal; Inherit: Cardinal; Name: String): THandle;
+  external 'OpenMutexW@kernel32.dll stdcall';
+function QjOpenEvent(Access: Cardinal; Inherit: Cardinal; Name: String): THandle;
+  external 'OpenEventW@kernel32.dll stdcall';
+function QjSetEvent(Event: THandle): Cardinal;
+  external 'SetEvent@kernel32.dll stdcall';
+function QjWaitForSingleObject(Handle: THandle; Millis: Cardinal): Cardinal;
+  external 'WaitForSingleObject@kernel32.dll stdcall';
+function QjReleaseMutex(Mutex: THandle): Cardinal;
+  external 'ReleaseMutex@kernel32.dll stdcall';
+function QjCloseHandle(Handle: THandle): Cardinal;
+  external 'CloseHandle@kernel32.dll stdcall';
+function QjGetCurrentProcessId: Cardinal;
+  external 'GetCurrentProcessId@kernel32.dll stdcall';
+function QjProcessIdToSessionId(ProcessId: Cardinal; var Session: Cardinal): Cardinal;
+  external 'ProcessIdToSessionId@kernel32.dll stdcall';
+
+{ 装 / 卸的整个过程里持有 DLL 的「拉 Server」互斥体（安装程序退出时系统收回）：各应用里的 DLL（含升级前的旧 DLL）
+  发现 Server 没了会去拉，文件替换到一半时拉起的是旧 exe——要么锁住文件覆盖失败，要么装完仍是旧 Server 在跑。
+  持有它的期间 DLL 不拉；装完的那一次由 StartServer 自己起（它不看这个互斥体）。 }
+procedure BlockServerLaunch;
+begin
+  CreateMutex(QJ_LAUNCH_MUTEX);
+end;
+
+{ 请本会话的 Server 让位：它先把学习数据落盘再退出（taskkill /f 会丢掉最近一分钟没落盘的学习数据）。
+  没有新版 Server（老版本不建单实例互斥体）或开不了（别的账户装的）就什么都不做，交给后面的 taskkill。
+  等单实例互斥体被遗弃（= Server 进程已退）后要立刻放掉，不然本进程占着它，装完起的 Server 会以为现任还在。 }
+procedure StopServerGracefully;
+var
+  Session, Wait: Cardinal;
+  Mutex, Event: THandle;
+begin
+  if QjProcessIdToSessionId(QjGetCurrentProcessId, Session) = 0 then
+    Exit;
+  Mutex := QjOpenMutex(QJ_SYNCHRONIZE or QJ_MUTEX_MODIFY_STATE, 0, QJ_INSTANCE_MUTEX + IntToStr(Integer(Session)));
+  if Mutex = 0 then
+    Exit;
+  Event := QjOpenEvent(QJ_EVENT_MODIFY_STATE, 0, QJ_STEP_DOWN_EVENT + IntToStr(Integer(Session)));
+  if Event <> 0 then
+  begin
+    QjSetEvent(Event);
+    QjCloseHandle(Event);
+    Wait := QjWaitForSingleObject(Mutex, 5000);
+    if (Wait = QJ_WAIT_OBJECT_0) or (Wait = QJ_WAIT_ABANDONED) then
+    begin
+      QjReleaseMutex(Mutex);
+      Log('Server 已让位退出（学习数据已落盘）');
+    end
+    else
+      Log('Server 没在 5 秒内让位，改用 taskkill');
+  end;
+  QjCloseHandle(Mutex);
+end;
+
 procedure KillProcess(const Image: String);
 var
   ResultCode: Integer;
@@ -211,9 +277,12 @@ begin
 end;
 
 { 覆盖前先结束 Server、语音 Worker 与设置程序（DLL 按版本并排装，不用关应用）。
+  先堵住 DLL 拉 Server，再请本会话的 Server 体面退出，最后 taskkill 兜底（别的会话 / 老版本 / 卡住的）。
   没在跑时 taskkill 返回非 0，忽略。 }
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
+  BlockServerLaunch;
+  StopServerGracefully;
   KillProcess('qingjian-server.exe');
   KillProcess('qingjian-voice-worker.exe');
   KillProcess('qingjian-settings.exe');
@@ -260,8 +329,8 @@ end;
 
 { 起一次 Server。uiAccess=true 的 exe 不能用 CreateProcess / runasoriginaluser 拉起（报 740），
   必须以原（非提升）用户身份 ShellExecute（等同双击），AppInfo 才会授予 uiAccess 高 z-band 权限。
-  拉不起来（没有原始用户令牌）只记日志：Server 现在 UI 起不来会自己退出、不占管道，
-  TSF DLL 首次按键与登录启动项都会补拉，不会卡成「能打字、没窗口」。 }
+  拉不起来（没有原始用户令牌，例如以 SYSTEM 静默推送）只记日志：安装程序退出后 TSF DLL 首次按键会补拉，
+  登录启动项也会起。 }
 procedure StartServer;
 var
   ErrorCode: Integer;
@@ -282,6 +351,16 @@ begin
       要等到下次登录才回来，这中间输入法在每个应用里都连不上。 }
     if WizardSilent then
       StartServer;
+  end;
+end;
+
+{ 卸载：[UninstallRun] 的 taskkill 之前，同样先堵住 DLL 拉 Server、请 Server 落盘后退出。 }
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then
+  begin
+    BlockServerLaunch;
+    StopServerGracefully;
   end;
 end;
 

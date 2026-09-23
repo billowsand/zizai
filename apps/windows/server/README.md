@@ -9,6 +9,7 @@ Windows 端的整体结构、为什么内核要在进程外、构建与注册步
 - `assembly`：装配 Engine（词库 / 学习）。
 - `dispatch::Router`：按 `SessionId` 分派多会话，处理按键、上屏、异步结果推送。
 - `session`：单个应用会话的组句状态。
-- `ipc`：长度前缀帧的收发循环；`ipc::pipe`（`cfg(windows)`）在 `\\.\pipe\qingjian` 上起命名管道服务。
+- `ipc`：长度前缀帧的收发循环；`ipc::pipe`（`cfg(windows)`）在本会话的 `\\.\pipe\qingjian.<会话号>` 上起命名管道服务；
+  `instance`（`cfg(windows)`）管每会话单实例与接管（`--replace` 无条件请现任让位）。
 
 bin `src/main.rs` 只做配置读取、Engine 装配与启动；逻辑都在库部分，`tests/` 里的集成测试直接用库。

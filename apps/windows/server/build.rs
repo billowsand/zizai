@@ -20,6 +20,11 @@ fn main() {
                 "cargo:warning=QINGJIAN_UIACCESS=1：Server 带 uiAccess，必须签名且装进 Program Files 才起得来"
             );
         }
+        // 运行时据此判断「该有 uiAccess 却没拿到」（降级，见 instance::ProcessContext）。
+        println!(
+            "cargo:rustc-env=QINGJIAN_SERVER_UIACCESS={}",
+            if ui_access { "1" } else { "0" }
+        );
         let manifest = new_manifest("Qingjian.Server")
             .requested_execution_level(ExecutionLevel::AsInvoker)
             .ui_access(ui_access);

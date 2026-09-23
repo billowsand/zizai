@@ -34,10 +34,8 @@ impl Canvas {
         };
         let mut bits = core::ptr::null_mut();
         let dib = unsafe { CreateDIBSection(None, &bmi, DIB_RGB_COLORS, &mut bits, None, 0)? };
-        // DC 必须先建好再判空：拿一个无效 HDC 调 SelectObject 会进 GDI 句柄表；
-        // 之后 Drop 时 `previous` 又被记成 NULL，再去 SelectObject(NULL) 第二次踩坑。
-        // 候选框与状态条共用同一个 Paint 的时候，GDI 状态错位会同时牵连两边——
-        // 表现是状态条能渲染但贴错位 / 候选框 present 被拒而隐身。
+        // 先确认 DC 建出来了再往里选位图，每一步失败都把已建的对象收干净。
+        // 选入失败也要当错误：否则后面全画在 DC 自带的 1×1 默认位图上，窗口隐身且没有任何报错。
         let memdc = unsafe { CreateCompatibleDC(None) };
         if memdc.is_invalid() {
             unsafe {
@@ -46,9 +44,11 @@ impl Canvas {
             return Err(Error::from(E_FAIL));
         }
         let previous = unsafe { SelectObject(memdc, dib.into()) };
-        if bits.is_null() {
+        if previous.is_invalid() || bits.is_null() {
             unsafe {
-                SelectObject(memdc, previous);
+                if !previous.is_invalid() {
+                    SelectObject(memdc, previous);
+                }
                 let _ = DeleteDC(memdc);
                 let _ = DeleteObject(dib.into());
             }

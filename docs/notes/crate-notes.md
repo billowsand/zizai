@@ -185,19 +185,36 @@ Server 没起来时 DLL 自己拉（`client/launch.rs`）：管道不在就 `She
 不如让字母直接进应用当英文打。协议对不上（本进程还加载着升级前的旧 DLL）时合上 `client/mismatch.rs` 的进程级闸：
 之后整键放行、不再连 Server、日志只记一次，重启这个应用即恢复。
 
-Server 的独占与接管（`ipc/pipe.rs`）：`\\.\pipe\qingjian` 第一个实例带 `FILE_FLAG_FIRST_PIPE_INSTANCE`，
-同一时刻只让一个 Server 持管道（两个会各画一条状态条、各持一份状态）。但**建不出第一个实例时不再直接退出**：
-先往会话内的接管事件 `Local\Qingjian.ServerStepDown.<管道名>`（`step_down_event_name` 按管道名派生，
-不同管道互不打扰）`SetEvent` 一次，现任的监听线程收到后工人循环收尾（`Work::StepDown`，先把学习数据落盘）
-退出，新 Server 再抢管道接管。用命名事件而非协议消息，不动 DLL ↔ Server 的线上协议；事件描述符与管道同款
-（完整性标 Low），提权起的 Server 建的事件普通权限也写得进。现任是老版本、不认识这个事件时等到超时，
-退回原来的「管道被占就退出」。
+Server 的单实例与接管（`instance/`，名字在 `qingjian_platform::instance`，安装脚本手抄了其中两串）：
 
-配套的自我保护（`main.rs::serve`）：**UI 起不来就 `exit`，不占管道**；UI 线程中途死掉（`UiHandle::is_alive`
-转假）也退出。否则会变成「能打字、没窗口」的 Server——它握着独占管道，后来启动的 Server 全被拒，用户永远
-等不到候选窗与状态条。2026-09-23 真机踩过：一次提权上下文（环境被剥离、连 `LOCALAPPDATA` 都没有）拉起的
-Server 建不出窗口又占着管道，卡了二十分钟。`dirs.rs` 的日志 / 配置目录也加了 `%USERPROFILE%` 回落，环境不全
-时至少还能写日志、读配置。
+- **管道按会话分**：`\\.\pipe\qingjian.<会话号>`。管道名是整机共用的，不带会话号时快速切换用户 / 远程桌面下
+  第二个用户的 DLL 会连到第一个用户的 Server（按键进了别人的进程、候选窗画在别人桌面上）。DLL 连上后还用
+  `GetNamedPipeServerSessionId` 核对对端在本会话。Server 另外尽力在不带会话号的旧名字上也听一份，给升级后
+  没重启的应用里的旧 DLL（`ipc::pipe::listen_legacy`），旧 DLL 淘汰干净后删。
+- **单实例互斥体** `Local\Qingjian.Server.<后缀>`：Server 一起来（**装配 Engine、读学习数据之前**）就抢，主线程持有到
+  进程退出，进程没了系统遗弃它。已被占时看现任挂的**构建标记**（`Local\Qingjian.ServerBuild.<后缀>.<构建号>`，
+  构建号 = 版本 + exe 路径 + 大小 + 修改时间）与**降级标记**（现任被单独提权、或该有 uiAccess 却没拿到）：
+  同一份程序且现任不比自己差 → 本进程 `exit(0)`，不打扰现任（开机时 DLL 先拉起一个、一分钟后启动项再拉一个就是这样）；
+  否则（升级后的新构建、现任降级、`--replace`）往**让位事件** `Local\Qingjian.ServerStepDown.<后缀>` `SetEvent`，
+  等互斥体被遗弃（最多 5 秒）再装配。现任收到后工人循环收尾：学习数据落盘、`mem::forget` 掉 Router
+  （语音 Worker 的 join 可能拖好几秒）直接退出。
+- 接管在装配之前做完是为了学习数据：学习表是整表覆盖写的，后来者若先读了旧快照、现任再落盘，后来者下一次落盘
+  就会把现任最后那段学到的东西盖掉。
+- 让位事件只由现任建（后来者只开不建），接管后先 `ResetEvent`：事件被别的句柄撑着还留着上一轮信号时，
+  新现任一开始等就会「收到」让位请求、刚接管就退出。互斥体 / 事件 / 标记的 DACL 只放行本用户与 SYSTEM
+  （完整性标 Medium，提权起的现任也能被普通后来者叫停）；**不**像管道那样放行 Everyone / AppContainer，
+  否则任何沙箱应用都能随时让输入法退出、再趁空档抢注管道名。
+- DLL 看到本会话的单实例互斥体在就不拉 Server（它正在起来或正在接管，管道一会儿就有），宿主是被单独提权的进程、
+  服务账号或服务会话时也不拉（`client/host.rs`）：拉起的 Server 会继承宿主的令牌与环境。Server 自己也查：
+  服务会话 / 服务账号里直接退，环境缺 `APPDATA` / `LOCALAPPDATA` 时按已知文件夹补上（`known_folders.rs`）。
+- 安装器：`PrepareToInstall` 与卸载开始时先持有 DLL 的拉起互斥体 `Local\Qingjian.ServerLaunch` 到安装程序退出
+  （旧 DLL 也认它，文件替换到一半时不会被拉起旧 exe），再发让位事件等 Server 落盘退出，最后 `taskkill` 兜底。
+  安装器等到遗弃的互斥体后要立刻 `ReleaseMutex`，否则装完起的 Server 会以为现任还在。
+
+配套的自我保护（`main.rs::serve`）：**UI 起不来就 `exit`**；UI 线程中途死掉（`UiHandle::is_alive` 转假）也收尾退出。
+否则会变成「能打字、没窗口」的 Server，后来的同版本 Server 以为它好好的、自己退出，用户永远等不到候选窗与状态条。
+2026-09-23 真机踩过：一次剥了环境（连 `LOCALAPPDATA` 都没有）的上下文拉起的 Server 建不出窗口又占着管道，卡了二十分钟。
+还没覆盖的：窗口建出来了但画不出 / 看不见（`alive` 仍为真、管道也在，DLL 不会补拉），只能 `qingjian-server --replace` 或重新登录。
 
 ## assets
 

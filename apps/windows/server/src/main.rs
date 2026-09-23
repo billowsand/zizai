@@ -125,6 +125,17 @@ fn init_logging(config: &Config) -> Option<tracing_appender::non_blocking::Worke
 }
 
 fn main() {
+    // 服务会话 / 服务账号里起来的 Server（某个系统进程里的 DLL 拉的）画不到用户桌面，
+    // 读写的还是系统配置目录：什么都别碰，直接退。
+    #[cfg(windows)]
+    let context = qingjian_windows_server::instance::ProcessContext::current();
+    #[cfg(windows)]
+    if let Some(reason) = context.refusal() {
+        eprintln!("qingjian-server 不该{reason}运行，退出");
+        std::process::exit(2);
+    }
+    #[cfg(windows)]
+    qingjian_windows_server::known_folders::fill_missing();
     load_env();
 
     // 日志级别取自配置，所以先写模板、读配置，再装日志。
@@ -136,6 +147,9 @@ fn main() {
         Some(Err(error)) => tracing::warn!(%error, "写配置模板失败"),
         _ => {}
     }
+    // 单实例要在装配（读学习数据）之前定下来：接管时等现任把学习数据落盘退出了再读。
+    #[cfg(windows)]
+    let (instance, pipe_name) = claim_instance(&context);
     // 装机布局与 exe 同级，开发布局是仓库 `ime/`；都找不到回落工作目录。
     let root = resources::bundled_root().unwrap_or_else(|| PathBuf::from("."));
     let dict = std::env::var_os("QINGJIAN_DICT")
@@ -192,7 +206,38 @@ fn main() {
         "字在 Windows Server 就绪"
     );
 
+    #[cfg(windows)]
+    serve(router, &instance, &pipe_name);
+    #[cfg(not(windows))]
     serve(router);
+}
+
+/// 抢本会话的单实例，抢不到就退出（见 `instance` 模块）。返回实例与本会话的管道名。
+/// `--replace`：无条件请现任让位（手动重启服务时用）。
+#[cfg(windows)]
+fn claim_instance(
+    context: &qingjian_windows_server::instance::ProcessContext,
+) -> (qingjian_windows_server::instance::Instance, String) {
+    use std::time::Duration;
+
+    use qingjian_windows_server::instance::{ClaimError, Instance};
+
+    /// 请现任让位后等它退出的上限。现任收尾是落盘几张表再退，正常几十到几百毫秒。
+    const STEP_DOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
+    let pipe_name = qingjian_platform::instance::session_pipe_name(context.session);
+    let force = std::env::args().any(|arg| arg == "--replace");
+    match Instance::claim(&pipe_name, context, force, STEP_DOWN_TIMEOUT) {
+        Ok(instance) => (instance, pipe_name),
+        Err(ClaimError::AlreadyRunning) => {
+            tracing::info!("同一份 Server 已经在本会话跑着，本进程退出");
+            std::process::exit(0);
+        }
+        Err(error) => {
+            tracing::error!(%error, "抢不到 Server 单实例，本进程退出");
+            std::process::exit(1);
+        }
+    }
 }
 
 /// 语音功能缺省关闭；打开时 Worker 与 Server 同目录，模型路径相对随包根。
@@ -253,15 +298,20 @@ fn grant_appcontainer_log_access() {
     }
 }
 
-/// 起 UI 线程作为候选窗口 / 状态条的输出端，再在命名管道上服务到进程结束。
+/// 起 UI 线程作为候选窗口 / 状态条的输出端，再在本会话的命名管道上服务，直到被请求让位。
 ///
-/// **UI 起不来就退出，不占管道**：否则会变成一个「能打字、没窗口」的 Server——它握着独占的
-/// `\\.\pipe\qingjian`，后来启动的 Server 全在建实例时被拒、直接退出，用户永远等不到窗口。
+/// **UI 起不来就退出，不占单实例与管道**：否则会变成一个「能打字、没窗口」的 Server，
+/// 后来的同版本 Server 会以为它好好的、自己退出，用户永远等不到窗口。
 /// 退出后由下一个 Server（TSF DLL 连不上时自拉 / 登录启动项）接手，窗口自然就回来了。
 #[cfg(windows)]
-fn serve(mut router: Router) {
+fn serve(
+    mut router: Router,
+    instance: &qingjian_windows_server::instance::Instance,
+    pipe_name: &str,
+) {
     use std::time::Duration;
 
+    use qingjian_platform::instance::LEGACY_PIPE_NAME;
     use qingjian_windows_server::ipc::{Work, pipe};
     use qingjian_windows_server::ui::UiHandle;
     grant_appcontainer_log_access();
@@ -292,7 +342,17 @@ fn serve(mut router: Router) {
             }
         }
     });
-    if let Err(error) = pipe::serve_pipe(pipe::DEFAULT_PIPE_NAME, &mut router, work_tx, work_rx) {
+    // 后来的 Server / 安装器请本进程让位：工人循环收尾（学习数据落盘）后返回。
+    let step_down = work_tx.clone();
+    instance.watch(move || {
+        let _ = step_down.send(Work::StepDown);
+    });
+    pipe::listen_legacy(LEGACY_PIPE_NAME, work_tx.clone());
+    let served = pipe::serve_pipe(pipe_name, &mut router, work_tx, work_rx);
+    // 学习数据 serve_pipe 已落盘。Router 不走 Drop：语音 Worker 那边的 join 可能拖好几秒，
+    // 拖过后来者的等待上限就成了两边都退；Worker 在本进程退出、stdin 断开时自己收摊。
+    std::mem::forget(router);
+    if let Err(error) = served {
         tracing::error!(%error, "命名管道服务退出");
         std::process::exit(1);
     }

@@ -4,11 +4,15 @@ use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::windows::fs::OpenOptionsExt;
 
-use windows::Win32::Foundation::ERROR_PIPE_BUSY;
-use windows::Win32::System::Pipes::WaitNamedPipeW;
+use std::os::windows::io::AsRawHandle;
+
+use windows::Win32::Foundation::{ERROR_PIPE_BUSY, HANDLE};
+use windows::Win32::System::Pipes::{GetNamedPipeServerSessionId, WaitNamedPipeW};
 use windows::core::HSTRING;
 
-use qingjian_platform::protocol::DEFAULT_PIPE_NAME;
+use qingjian_platform::instance::session_pipe_name;
+
+use super::host;
 
 /// 连好的命名管道。对端关闭时读到 EOF；`flush` 是空操作（管道上 `FlushFileBuffers` 会阻塞到对端读完）。
 pub type PipeStream = File;
@@ -17,8 +21,21 @@ pub type PipeStream = File;
 const BUSY_WAIT_MS: u32 = 300;
 const BUSY_RETRIES: u32 = 1;
 
+/// 连本会话的 Server（`\\.\pipe\qingjian.<会话号>`）。管道名是整机共用的，所以连上后再核对一次
+/// 对端 Server 确实在本会话：别的会话里的进程抢先建了同名管道时，别把本会话的按键送过去。
 pub fn connect_default() -> io::Result<PipeStream> {
-    connect(DEFAULT_PIPE_NAME)
+    let session = host::session().ok_or_else(|| io::Error::other("查不到本进程的会话号"))?;
+    let stream = connect(&session_pipe_name(session))?;
+    let mut server_session = 0;
+    if unsafe { GetNamedPipeServerSessionId(HANDLE(stream.as_raw_handle()), &mut server_session) }
+        .is_ok()
+        && server_session != session
+    {
+        return Err(io::Error::other(format!(
+            "管道对端在会话 {server_session}，不是本会话 {session}，不连"
+        )));
+    }
+    Ok(stream)
 }
 
 pub fn connect(name: &str) -> io::Result<PipeStream> {

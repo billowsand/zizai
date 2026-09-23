@@ -1,4 +1,4 @@
-//! 命名管道传输：在 `\\.\pipe\qingjian` 上服务 DLL 客户端，字节模式，帧由协议 codec 切。
+//! 命名管道传输：在本会话的 `\\.\pipe\qingjian.<会话号>` 上服务 DLL 客户端，字节模式，帧由协议 codec 切。
 //!
 //! 每个应用进程各开一条连接且失焦后连接仍在，所以不能串行服务（新聚焦的应用连不上会阻塞 UI 线程、
 //! 触发 TSF 看门狗）：后台接受循环每来一个客户端就新建实例、起一条线程；[`Router`] 不跨线程，
@@ -6,22 +6,17 @@
 
 use std::fs::File;
 use std::io;
-use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_PIPE_CONNECTED, HANDLE};
-use windows::Win32::Security::Authorization::{
-    ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
-};
-use windows::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
 use windows::Win32::Storage::FileSystem::{FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX};
 use windows::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE,
     PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
-use windows::Win32::System::Threading::{CreateEventW, INFINITE, SetEvent, WaitForSingleObject};
 use windows::core::{HRESULT, HSTRING};
 
 use qingjian_platform::protocol::{
@@ -30,8 +25,7 @@ use qingjian_platform::protocol::{
 
 use super::Work;
 use crate::dispatch::Router;
-
-pub use qingjian_platform::protocol::DEFAULT_PIPE_NAME;
+use crate::security::SecurityDescriptor;
 
 const BUFFER_SIZE: u32 = 64 * 1024;
 
@@ -39,34 +33,16 @@ const BUFFER_SIZE: u32 = 64 * 1024;
 /// 完整性标 Low。任务栏搜索、设置这类 AppContainer 进程在默认 DACL 下连不上。
 const PIPE_SDDL: &str = "D:(A;;GA;;;WD)(A;;GA;;;AC)(A;;GA;;;S-1-15-2-2)S:(ML;;NW;;;LW)";
 
-/// 接管事件名前缀（会话内）。新起的 Server 发现管道被占时 `SetEvent` 请现任让位；现任收到就收尾退出，
-/// 把管道让出去。用命名事件而不是往管道里发协议消息：不动 DLL ↔ Server 的线上协议，纯 Server 侧。
-/// `Local\` 前缀 = 本登录会话，与管道一样是每会话一个。完整名字由 [`step_down_event_name`] 拼出。
-const STEP_DOWN_EVENT_PREFIX: &str = "Qingjian.ServerStepDown";
+/// 抢第一个实例时管道还被占着（上一个 Server 刚退、句柄还没关完）最多等多久。单实例互斥体已经保证
+/// 只有本进程在抢；这里等不到说明占着管道的是不认单实例互斥体的老版本 Server。
+const PIPE_RELEASE_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// 请求接管后等现任让位的上限。现任收尾（学习数据落盘 + 退出）一般几十毫秒；给足余量，超时按
-/// 「管道真被占着」失败。
-const STEP_DOWN_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// 接管事件名：跟着管道名走，不同管道（测试 / 开发各用各的）互不打扰。管道名里的非法字符（`\` 等）
-/// 换成 `_`。返回带 `Local\` 前缀的完整名字，可直接给 `CreateEventW` / `SetEvent` 用。
-pub fn step_down_event_name(pipe_name: &str) -> String {
-    let suffix: String = pipe_name
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect();
-    format!(r"Local\{STEP_DOWN_EVENT_PREFIX}.{suffix}")
-}
-
-/// 在命名管道上服务多个客户端。当前线程独占 [`Router`] 跑工人循环，正常不返回。
-/// `work` 通道由调用方建（UI 线程也往里投状态条事件），这里拿一份发送端给各连接。
-/// 第一个实例带 `FILE_FLAG_FIRST_PIPE_INSTANCE`：已有一个 Server 在跑就建不出来（两个 Server
-/// 会各画一条状态条、各持一份状态）。
+/// 在命名管道上服务多个客户端。当前线程独占 [`Router`] 跑工人循环，收到 [`Work::StepDown`] 时
+/// 把学习数据落盘后返回。`work` 通道由调用方建（UI 线程也往里投状态条事件），这里拿一份发送端给各连接。
 ///
-/// 建不出来时不再直接退出，而是**请现任让位再接管**：往 [`step_down_event_name`] 那个事件发一次
-/// 信号，等管道空出来再抢。这样即使现任是个「能打字、画不出窗口」的坏实例（UI 起不来 / 窗口建在了
-/// 看不见的地方 / UI 线程后来死了），新起的 Server 也能把它顶掉，不必让用户手动结束进程。现任是
-/// 老版本、不认识这个事件时，一路等到超时，退回原来的「管道被占就退出」。
+/// 谁该当 Server 由单实例互斥体（`crate::instance`）在装配之前就定了；这里第一个实例仍带
+/// `FILE_FLAG_FIRST_PIPE_INSTANCE`，挡住不认互斥体的老版本。管道被占时短等一会儿（上一个 Server
+/// 退出到句柄关完之间），等不到就报错退出。
 pub fn serve_pipe(
     name: &str,
     router: &mut Router,
@@ -74,31 +50,15 @@ pub fn serve_pipe(
     receiver: Receiver<Work>,
 ) -> io::Result<()> {
     let pipe = HSTRING::from(name);
-    // 接管事件先于管道建：新 Server 看到管道被占时才有对象可发信号。
-    let step_down = create_step_down_event(name);
-    let descriptor = pipe_security_descriptor();
-    let first = match create_instance(&pipe, descriptor, true) {
-        Ok(first) => first,
-        Err(error) if error.raw_os_error() == Some(ERROR_ACCESS_DENIED.0 as i32) => {
-            if let Some(handle) = &step_down {
-                let _ = unsafe { SetEvent(HANDLE(handle.as_raw_handle())) };
-                tracing::info!("已有一个 qingjian-server，已请求它让位");
-            }
-            acquire_first_with_retry(&pipe, descriptor).map_err(|_| {
-                io::Error::other("已有一个 qingjian-server 在运行（命名管道被占），本进程退出")
-            })?
+    let descriptor = SecurityDescriptor::from_sddl(PIPE_SDDL);
+    let first = acquire_first(&pipe, &descriptor).map_err(|error| {
+        if error.raw_os_error() == Some(ERROR_ACCESS_DENIED.0 as i32) {
+            io::Error::other("命名管道被另一个（老版本的）qingjian-server 占着，本进程退出")
+        } else {
+            error
         }
-        Err(error) => return Err(error),
-    };
-    // 本进程成为 Server：起一条线程等接管信号（后来者 SetEvent 时退出，把管道让出去）。
-    if let Some(handle) = step_down {
-        let watcher = sender.clone();
-        thread::spawn(move || {
-            let _ = unsafe { WaitForSingleObject(HANDLE(handle.as_raw_handle()), INFINITE) };
-            let _ = watcher.send(Work::StepDown);
-        });
-    }
-    thread::spawn(move || accept_loop(&pipe, first, sender));
+    })?;
+    thread::spawn(move || accept_loop(&pipe, &descriptor, first, sender));
     tracing::info!(pipe = name, "命名管道监听中");
     // 按 Router 的节拍来 tick：在等本地整句模型就几十毫秒一次，否则一秒看一次配置文件。
     // 到点时间是绝对的，不随消息重新计时——前台进程里的 DLL 隔几百毫秒就问一次切模式（SyncMode），
@@ -117,7 +77,9 @@ pub fn serve_pipe(
             }
             Ok(Work::Status(event)) => router.handle_status_event(event),
             Ok(Work::StepDown) => {
-                tracing::info!("收到收尾信号（另一个 Server 请求接管 / UI 线程退出），退出让位");
+                tracing::info!(
+                    "收到收尾信号（另一个 Server 请求接管 / 安装器要升级 / UI 线程退出），退出让位"
+                );
                 break;
             }
             Err(RecvTimeoutError::Timeout) => continue,
@@ -131,26 +93,29 @@ pub fn serve_pipe(
     Ok(())
 }
 
-/// 建（或打开）接管事件。描述符与管道同款（完整性标 Low）：高完整性 / AppContainer 的进程也能发信号，
-/// 否则提权起的 Server 建的事件，普通权限的新 Server 写不进去。
-fn create_step_down_event(pipe_name: &str) -> Option<OwnedHandle> {
-    let descriptor = pipe_security_descriptor();
-    let attributes = SECURITY_ATTRIBUTES {
-        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
-        lpSecurityDescriptor: descriptor.0,
-        bInheritHandle: false.into(),
-    };
-    let attributes = (!descriptor.0.is_null()).then_some(&raw const attributes);
-    let name = HSTRING::from(step_down_event_name(pipe_name));
-    let handle = unsafe { CreateEventW(attributes, false, false, &name) }
-        .inspect_err(|error| tracing::warn!(%error, "建接管事件失败，退回「管道被占就退出」"))
-        .ok()?;
-    Some(unsafe { OwnedHandle::from_raw_handle(handle.0) })
+/// 在旧版 DLL 认的管道名上也听一份（尽力而为）：升级后没重启的应用里还加载着旧 DLL，它们只认
+/// 不带会话号的 `\\.\pipe\qingjian`。别的会话的 Server 已经占了它（多用户同时登录）就算了——
+/// 那也是旧 DLL 原来的行为。等旧 DLL 淘汰干净就删掉。
+pub fn listen_legacy(name: &str, sender: Sender<Work>) {
+    let pipe = HSTRING::from(name);
+    let descriptor = SecurityDescriptor::from_sddl(PIPE_SDDL);
+    match create_instance(&pipe, &descriptor, true) {
+        Ok(first) => {
+            thread::spawn(move || accept_loop(&pipe, &descriptor, first, sender));
+            tracing::info!(
+                pipe = name,
+                "旧版管道名也在监听（给没重启的应用里的旧 DLL）"
+            );
+        }
+        Err(error) => {
+            tracing::info!(%error, pipe = name, "旧版管道名没抢到，旧 DLL 这回连不上本 Server")
+        }
+    }
 }
 
-/// 让位请求发出后，轮询等管道空出来再抢第一个实例。超时（现任没让位 / 另有新 Server 先抢到）按失败。
-fn acquire_first_with_retry(name: &HSTRING, descriptor: PSECURITY_DESCRIPTOR) -> io::Result<File> {
-    let deadline = Instant::now() + STEP_DOWN_TIMEOUT;
+/// 抢第一个实例；被占着就每 100 ms 再试，直到 [`PIPE_RELEASE_TIMEOUT`]。
+fn acquire_first(name: &HSTRING, descriptor: &SecurityDescriptor) -> io::Result<File> {
+    let deadline = Instant::now() + PIPE_RELEASE_TIMEOUT;
     loop {
         match create_instance(name, descriptor, true) {
             Ok(file) => return Ok(file),
@@ -166,8 +131,7 @@ fn acquire_first_with_retry(name: &HSTRING, descriptor: PSECURITY_DESCRIPTOR) ->
 }
 
 /// 先在建好的第一个实例上等客户端，之后每建一个实例、等一个客户端连上，就起一条线程服务它。建实例出错才停。
-fn accept_loop(name: &HSTRING, first: File, sender: Sender<Work>) {
-    let descriptor = pipe_security_descriptor();
+fn accept_loop(name: &HSTRING, descriptor: &SecurityDescriptor, first: File, sender: Sender<Work>) {
     let mut instance = Ok(first);
     loop {
         let stream = match instance.and_then(wait_client) {
@@ -183,41 +147,17 @@ fn accept_loop(name: &HSTRING, first: File, sender: Sender<Work>) {
     }
 }
 
-/// 转换失败返回 null，退回默认 DACL。描述符建一次、随进程存活。
-fn pipe_security_descriptor() -> PSECURITY_DESCRIPTOR {
-    let mut descriptor = PSECURITY_DESCRIPTOR::default();
-    let converted = unsafe {
-        ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            &HSTRING::from(PIPE_SDDL),
-            SDDL_REVISION_1,
-            &mut descriptor,
-            None,
-        )
-    };
-    if let Err(error) = converted {
-        tracing::warn!(%error, "构建管道安全描述符失败，退回默认 DACL（UWP 应用可能连不上）");
-        return PSECURITY_DESCRIPTOR::default();
-    }
-    descriptor
-}
-
 /// 建一个实例。句柄交给 `File` 管：对端关闭时 std 把 `ERROR_BROKEN_PIPE` 当 EOF。
 fn create_instance(
     name: &HSTRING,
-    descriptor: PSECURITY_DESCRIPTOR,
+    descriptor: &SecurityDescriptor,
     first: bool,
 ) -> io::Result<File> {
-    let attributes = SECURITY_ATTRIBUTES {
-        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
-        lpSecurityDescriptor: descriptor.0,
-        bInheritHandle: false.into(),
-    };
-    let attributes = (!descriptor.0.is_null()).then_some(&raw const attributes);
     let mut open_mode = PIPE_ACCESS_DUPLEX;
     if first {
         open_mode |= FILE_FLAG_FIRST_PIPE_INSTANCE;
     }
-    let handle = unsafe {
+    let handle = descriptor.with_attributes(|attributes| unsafe {
         CreateNamedPipeW(
             name,
             open_mode,
@@ -228,7 +168,7 @@ fn create_instance(
             0,
             attributes,
         )
-    };
+    });
     if handle.is_invalid() {
         return Err(io::Error::last_os_error());
     }

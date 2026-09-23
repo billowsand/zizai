@@ -12,6 +12,6 @@ pub enum Work {
     /// UI 线程发来的状态条操作。
     Status(StatusEvent),
 
-    /// 该收尾退出了：另一个新起的 Server 请求接管，或本进程的 UI 线程已死。
+    /// 该收尾退出了：另一个新起的 Server 或安装器请求让位，或本进程的 UI 线程已死。
     StepDown,
 }

@@ -12,7 +12,8 @@ use std::io::{self, Read, Write};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-/// 缺省命名管道名。Server 在这上面监听，DLL 用同名连上。放这里让两端共享同一个字面量。
+/// 命名管道的基名。现在实际用的是带会话号的 `<基名>.<会话号>`（[`crate::instance::session_pipe_name`]）；
+/// 不带会话号的这个名字只留给升级前的旧 DLL（[`crate::instance::LEGACY_PIPE_NAME`]）。
 pub const DEFAULT_PIPE_NAME: &str = r"\\.\pipe\qingjian";
 
 /// 单帧上限，挡住坏长度前缀导致的巨量分配。
