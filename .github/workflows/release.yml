@@ -166,7 +166,9 @@ jobs:
         if: env.BUNDLED == '1'
         shell: pwsh
         run: |
-          $BundledDir = Join-Path $Repo 'target/bundled-models'
+          $RepoRoot = $env:GITHUB_WORKSPACE
+          if (-not $RepoRoot) { throw '$env:GITHUB_WORKSPACE 未设置' }
+          $BundledDir = Join-Path $RepoRoot 'target/bundled-models'
           if (Test-Path $BundledDir) { Remove-Item -Recurse -Force $BundledDir }
           New-Item -ItemType Directory -Path (Join-Path $BundledDir 'sense-voice') -Force | Out-Null
           New-Item -ItemType Directory -Path (Join-Path $BundledDir 'punctuation') -Force | Out-Null
