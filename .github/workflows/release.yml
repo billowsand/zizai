@@ -61,19 +61,19 @@ jobs:
 
       - name: Check version matches tag and tag is on main
         run: |
+          set +e
           VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' apps/windows/server/Cargo.toml | head -1)"
-          TAG="${GITHUB_REF_NAME#windows-v}"
-          # bundled 变体：windows-v0.1.11-bundled 指向同一份 0.1.11 commit（也可能指向更早已发版的 commit），
-          # asset 上传到该 release 上。去掉 -bundled 后缀再比版本号。
-          if [[ "$TAG" == *-bundled ]]; then
+          # tag push 触发时 GITHUB_REF 在不同 runner 上 form 不一致（有 refs/tags/ 也有仅名字），取 basename。
+          TAG_REF_NAME="${GITHUB_REF##*/}"
+          TAG="${TAG_REF_NAME#windows-v}"
+          # bundled 变体：windows-v<version>-bundled 指向同一份已发版 commit。
+          BUNDLED="0"
+          if [ "${TAG_REF_NAME%-bundled}" != "$TAG_REF_NAME" ]; then
             TAG="${TAG%-bundled}"
-            echo "BUNDLED=1" >> "$GITHUB_ENV"
-            echo "BASE_TAG=windows-v$TAG" >> "$GITHUB_ENV"
-            # bundled 跳过「main 祖先」检查：tag 是补发在历史已发版的 commit 上。
-            echo "allow_history_tag=1" >> "$GITHUB_ENV"
+            BUNDLED="1"
           fi
           if [[ "$VERSION" != "$TAG" ]]; then
-            echo "apps/windows/server/Cargo.toml 是 $VERSION，标签是 $GITHUB_REF_NAME，先改版本号再打标签" >&2
+            echo "apps/windows/server/Cargo.toml 是 $VERSION，标签是 $TAG_REF_NAME，先改版本号再打标签" >&2
             exit 1
           fi
           if [[ "$VERSION" == *-dev ]]; then
@@ -81,13 +81,20 @@ jobs:
             exit 1
           fi
           git fetch --no-tags origin main
-          if [[ "${allow_history_tag:-0}" != '1' ]]; then
+          if [[ "$BUNDLED" == "1" ]]; then
+            # bundled 变体：tag 故意指向历史已发版 commit，不必在 main 上。
+            echo "bundled 变体：跳过 main 祖先检查（$GITHUB_SHA 不必在 origin/main 上）"
+          else
             if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-              echo "标签 $GITHUB_REF_NAME 指向的提交 $GITHUB_SHA 不在 main 上，先合并再发" >&2
+              echo "标签 $TAG_REF_NAME 指向的提交 $GITHUB_SHA 不在 main 上，先合并再发" >&2
               exit 1
             fi
-          else
-            echo "bundled 变体：跳过 main 祖先检查（allow-history-tag=1）"
+          fi
+          set -e
+          # 写 env 给后续 step（GitHub Actions 会在 step 退出后处理 GITHUB_ENV 文件）
+          if [[ "$BUNDLED" == "1" ]]; then
+            echo "BUNDLED=1" >> "$GITHUB_ENV"
+            echo "BASE_TAG=windows-v$TAG" >> "$GITHUB_ENV"
           fi
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
