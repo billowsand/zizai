@@ -55,7 +55,34 @@ cargo 命令全 `--locked`（含 `build.ps1`）。普通 CI 只有 `contents: re
 | 文件 | 触发 | 做什么 |
 |---|---|---|
 | `.github/workflows/ci.yml` | push main、PR | Linux 上 `cargo fmt --check` / clippy / test（Core 与协议层与平台无关）；Windows 上编 Server / TSF DLL / Settings 并跑测试 |
-| `.github/workflows/release.yml` | 推 `windows-v*` 标签 | 下载产品数据 → 构建 → SignPath 签回二进制（配齐时）→ `build.ps1` 打 Inno Setup 安装包 → 签安装包 → 建 Release → 生成 `releases.json` |
+| `.github/workflows/release.yml` | 推 `windows-v*`（含 `windows-v*-bundled`）标签 | 下载产品数据 → 构建 → SignPath 签回二进制（配齐时）→ `build.ps1` 打 Inno Setup 安装包 → 签安装包 → 建 Release → 生成 `releases.json` |
+
+## bundled 变体（带本地模型的安装包）
+
+`windows-v<版本>-bundled` 标签走同一份 `release.yml`，但走旁支产出一个 `Zizai-<版本>-bundled-Setup.exe`，
+**追加**到该版本标准 release 的 asset 列表（不新建 release，不动 `latest`）。
+
+- 与标准版共享 `[AppId]`、同一份 `qingjian.iss`，所以从普通版直接装 bundled 是覆盖升级、模型被卸走；
+  反过来从 bundled 装到普通版同理。升级提示里 `Keep [voice]` 之类配置和用户词照旧保留（`%APPDATA%\Qingjian` 不动）。
+- 随包的数据：标准版那 8 套（`.qj`、英文表、`model.qjm`、emoji、`xiaohe` 等）以外，加 SenseVoice `model.int8.onnx` + `tokens.txt`、
+  标点恢复 `model.int8.onnx`、同音词 `lexicon.txt` + `replace.fst`。安装包大小由 ~80 MB 涨到 ~280 MB。
+- tag 门禁：与标准版同样——`apps/windows/server/Cargo.toml` 版本号 = 标签去掉 `-bundled` 后缀；
+  `0.1.11-bundled` 允许指向 **已经发过版的 commit**（也就是 `f1ae90a` 或更早带 dev 的 `1313253`，只要 5 份 windows 子 crate 还是 `0.1.11` 即可），
+  不要求是最新 main HEAD。这样一个版本号可以补几个日期的 bundled asset，而不踩「-dev 不让 tag」的规则。
+- 第三方模型许可（Apache-2.0）随 `THIRD_PARTY_NOTICES.md` 进安装包；release notes 里多一段写明「本安装包含本地模型」
+  并列出每份资源的来源 tag，方便用户对照官方 release 做合规审计。
+
+打一个 bundled 变体的具体步骤：
+
+1. 选已经发过版的那个 commit（最简单：保持已发版的 `windows-v<版本>` commit 不动，或者用 newest main 上同一份 `0.1.11` 复刻）。
+2. `git tag -a windows-v<版本>-bundled -m "字在 Zizai Windows <版本> bundled"` 指向那份 commit，
+   `git push origin windows-v<版本>-bundled`。
+3. CI 跑 `release.yml`，多一个 `Pre-fetch bundled models` 步骤从 sherpa-onnx release 下载三份模型到 `target/bundled-models/`
+   （SHA-256 由维护者手填到 workflow 注释里；下游 tag 不重发，CI 自动重打时 hash 不变则放行）。
+4. build.ps1 `-VoiceModelDir / -PunctuationModelDir / -HrDir -BuildLabel bundled` 编出 `Zizai-<版本>-bundled-Setup.exe`。
+5. `gh release upload` 追加到 BASE_TAG（即 `windows-v<版本>` 标准版）的 asset 列表；
+   不动 `SHA256SUMS` / `build-info.json`（仍是标准版那次构建时写的内容）。
+6. 重新生成 `releases.json`（按 BASE_TAG），新 asset 自动出现在官网下载页「其他平台/历史资产」那一档里。
 
 ## 产品数据从哪来
 
