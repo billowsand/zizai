@@ -14,7 +14,7 @@ name: release
 
 on:
   push:
-    tags: ['windows-v*']
+    tags: ['windows-v*', 'windows-v*-bundled']
 
 env:
   CARGO_TERM_COLOR: always
@@ -61,10 +61,19 @@ jobs:
 
       - name: Check version matches tag and tag is on main
         run: |
+          set +e
           VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' apps/windows/server/Cargo.toml | head -1)"
-          TAG="${GITHUB_REF_NAME#windows-v}"
+          # tag push 触发时 GITHUB_REF 在不同 runner 上 form 不一致（有 refs/tags/ 也有仅名字），取 basename。
+          TAG_REF_NAME="${GITHUB_REF##*/}"
+          TAG="${TAG_REF_NAME#windows-v}"
+          # bundled 变体：windows-v<version>-bundled 指向同一份已发版 commit。
+          BUNDLED="0"
+          if [ "${TAG_REF_NAME%-bundled}" != "$TAG_REF_NAME" ]; then
+            TAG="${TAG%-bundled}"
+            BUNDLED="1"
+          fi
           if [[ "$VERSION" != "$TAG" ]]; then
-            echo "apps/windows/server/Cargo.toml 是 $VERSION，标签是 $GITHUB_REF_NAME，先改版本号再打标签" >&2
+            echo "apps/windows/server/Cargo.toml 是 $VERSION，标签是 $TAG_REF_NAME，先改版本号再打标签" >&2
             exit 1
           fi
           if [[ "$VERSION" == *-dev ]]; then
@@ -72,9 +81,21 @@ jobs:
             exit 1
           fi
           git fetch --no-tags origin main
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "标签 $GITHUB_REF_NAME 指向的提交 $GITHUB_SHA 不在 main 上，先合并再发" >&2
-            exit 1
+          if [[ "$BUNDLED" == "1" ]]; then
+            # bundled 变体：tag 故意指向历史已发版 commit，不必在 main 上。
+            echo "bundled 变体：跳过 main 祖先检查（$GITHUB_SHA 不必在 origin/main 上）"
+          else
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+              echo "标签 $TAG_REF_NAME 指向的提交 $GITHUB_SHA 不在 main 上，先合并再发" >&2
+              exit 1
+            fi
+          fi
+          set -e
+          # 写 env 给后续 step（GitHub Actions 会在 step 退出后处理 GITHUB_ENV 文件）
+          if [[ "$BUNDLED" == "1" ]]; then
+            echo "BUNDLED=1" >> "$GITHUB_ENV"
+            echo "BASE_TAG=windows-v$TAG" >> "$GITHUB_ENV"
+            echo "allow_history_tag=1" >> "$GITHUB_ENV"
           fi
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
@@ -145,11 +166,100 @@ jobs:
           "SHERPA_ONNX_LIB_DIR=$((Resolve-Path (Join-Path $Extracted 'lib')).Path)" `
             | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      # bundled 变体：把 SenseVoice / 标点恢复 / 同音词替换三个第三方模型拉到本地目录，
+      # 让 build.ps1 用 -VoiceModelDir / -PunctuationModelDir / -HrDir 打进安装包。
+      # 仅当 BUNDLED=1 时跑；非 bundled tag 这几个 step 跳空。
+      # URL 与 SHA-256 由维护者手工核实后固化——sherpa-onnx 不重发 GitHub release tag。
+      - name: Pre-fetch bundled models (SenseVoice / punctuation / hr)
+        if: env.BUNDLED == '1'
+        shell: pwsh
+        run: |
+          $RepoRoot = $env:GITHUB_WORKSPACE
+          if (-not $RepoRoot) { throw '$env:GITHUB_WORKSPACE 未设置' }
+          $BundledDir = Join-Path $RepoRoot 'target/bundled-models'
+          if (Test-Path $BundledDir) { Remove-Item -Recurse -Force $BundledDir }
+          New-Item -ItemType Directory -Path (Join-Path $BundledDir 'sense-voice') -Force | Out-Null
+          New-Item -ItemType Directory -Path (Join-Path $BundledDir 'punctuation') -Force | Out-Null
+          New-Item -ItemType Directory -Path (Join-Path $BundledDir 'hr') -Force | Out-Null
+
+          # 1) SenseVoice（int8）：sherpa-onnx 官方 release v<ver>，与 sherpa-onnx-sys 锁同一个版本。
+          $SHERPA_VER = '1.13.8'
+          $SvUrl = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2"
+          $SvTar = Join-Path $BundledDir 'sense-voice/sv.tar.bz2'
+          Invoke-WebRequest -Uri $SvUrl -OutFile $SvTar
+          $SvSha = (Get-FileHash -Path $SvTar -Algorithm SHA256).Hash.ToLowerInvariant()
+          $SvExpected = '7d1efa2138a65b0b488df37f8b89e3d91a60676e416f515b952358d83dfd347e'
+          if ($SvSha -ne $SvExpected) {
+            throw "SenseVoice archive SHA-256 不符：$SvSha（期望 $SvExpected）。换模型时来这里改。"
+          }
+          tar -xjf $SvTar -C (Join-Path $BundledDir 'sense-voice')
+          Remove-Item $SvTar
+          # tar 出来后子目录名通常是 sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/，按内容向下探一层
+          $svInner = Get-ChildItem (Join-Path $BundledDir 'sense-voice') -Directory | Select-Object -First 1
+          if ($svInner) {
+            Get-ChildItem $svInner.FullName | ForEach-Object { Move-Item -Path $_.FullName -Destination (Join-Path $BundledDir 'sense-voice') -Force }
+            Remove-Item $svInner.FullName -Recurse -Force
+          }
+          if (-not (Test-Path (Join-Path $BundledDir 'sense-voice/model.int8.onnx'))) { throw 'SenseVoice model.int8.onnx 未落地' }
+          if (-not (Test-Path (Join-Path $BundledDir 'sense-voice/tokens.txt'))) { throw 'SenseVoice tokens.txt 未落地' }
+          Write-Host "SenseVoice OK"
+
+          # 2) 标点恢复：sherpa-onnx punctuation-models tag，文件名见 crate-notes 与 build.ps1 注释
+          $PunctUrl = 'https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-models/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8.tar.bz2'
+          $PunctTar = Join-Path $BundledDir 'punctuation/punct.tar.bz2'
+          Invoke-WebRequest -Uri $PunctUrl -OutFile $PunctTar
+          $PunctSha = (Get-FileHash -Path $PunctTar -Algorithm SHA256).Hash.ToLowerInvariant()
+          $PunctExpected = 'c0d5aa5f8eeb686032345e180bedf39319dc2e0556781c6264bcadba8328a6e1'
+          if ($PunctSha -ne $PunctExpected) {
+            throw "punctuation archive SHA-256 不符：$PunctSha（期望 $PunctExpected）。换模型时来这里改。"
+          }
+          tar -xjf $PunctTar -C (Join-Path $BundledDir 'punctuation')
+          Remove-Item $PunctTar
+          $punctInner = Get-ChildItem (Join-Path $BundledDir 'punctuation') -Directory | Select-Object -First 1
+          if ($punctInner) {
+            Get-ChildItem $punctInner.FullName | ForEach-Object { Move-Item -Path $_.FullName -Destination (Join-Path $BundledDir 'punctuation') -Force }
+            Remove-Item $punctInner.FullName -Recurse -Force
+          }
+          if (-not (Test-Path (Join-Path $BundledDir 'punctuation/model.int8.onnx'))) { throw 'punctuation model.int8.onnx 未落地' }
+          Write-Host "punctuation OK"
+
+          # 3) 同音词 FST 与 lexicon：同包，sherpa-onnx 仓库上传两份小文件
+          $HrLexUrl = 'https://github.com/k2-fsa/sherpa-onnx/releases/download/hr-files/lexicon.txt'
+          $HrFstUrl = 'https://github.com/k2-fsa/sherpa-onnx/releases/download/hr-files/replace.fst'
+          $HrLexTgt = Join-Path $BundledDir 'hr/lexicon.txt'
+          $HrFstTgt = Join-Path $BundledDir 'hr/replace.fst'
+          Invoke-WebRequest -Uri $HrLexUrl -OutFile $HrLexTgt
+          Invoke-WebRequest -Uri $HrFstUrl -OutFile $HrFstTgt
+          $HrLexSha = (Get-FileHash -Path $HrLexTgt -Algorithm SHA256).Hash.ToLowerInvariant()
+          $HrFstSha = (Get-FileHash -Path $HrFstTgt -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($HrLexSha -ne '978900e511bc481b8630cb6e4a573c12566fa092c366d5396e2c3823dec9dcb9') {
+            throw "hr/lexicon.txt SHA-256 不符：$HrLexSha。hr-files release 出新版时改这里。"
+          }
+          if ($HrFstSha -ne '6316a8496edf222191fd768ef08e420230097ec5076f2a2665f7d07e17051896') {
+            throw "hr/replace.fst SHA-256 不符：$HrFstSha。"
+          }
+          Write-Host "hr OK"
+
+          # 4) 给后续 step 写指向三个目录的环境变量
+          "BUNDLED_VOICE_DIR=$((Resolve-Path (Join-Path $BundledDir 'sense-voice')).Path)" `
+            | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "BUNDLED_PUNCT_DIR=$((Resolve-Path (Join-Path $BundledDir 'punctuation')).Path)" `
+            | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "BUNDLED_HR_DIR=$((Resolve-Path (Join-Path $BundledDir 'hr')).Path)" `
+            | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Build binaries
         shell: pwsh
         # -NoPackage：只构建。签回后再 -PackageOnly -PreSigned 打包，已签文件被 Inno 原样拷进安装包。
         # SHERPA_ONNX_LIB_DIR 由上游 Pre-fetch step 注入；build.rs 看这个变量就会跳过 GitHub 下载。
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1 -NoPackage
+        # bundled 变体：传 -VoiceModelDir / -PunctuationModelDir / -HrDir / -BuildLabel bundled，让 build.ps1 把模型打进包。
+        run: |
+          $args = @('-NoPackage')
+          if ($env:BUNDLED_VOICE_DIR) { $args += @('-VoiceModelDir', $env:BUNDLED_VOICE_DIR) }
+          if ($env:BUNDLED_PUNCT_DIR) { $args += @('-PunctuationModelDir', $env:BUNDLED_PUNCT_DIR) }
+          if ($env:BUNDLED_HR_DIR)    { $args += @('-HrDir', $env:BUNDLED_HR_DIR) }
+          if ($env:BUNDLED -eq '1')   { $args += '-BuildLabel', 'bundled' }
+          powershell -NoProfile -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1 @args
 
       # —— SignPath 签名第一段：TSF DLL 64/32 位、Server、语音 Worker、设置程序 ——
       # 关键的就是 TSF DLL：没签名的 DLL 在 UWP / 系统应用（任务栏搜索、「设置」）里被禁，签过才加载得进去。
@@ -228,6 +338,10 @@ jobs:
           # 签回产物打包带 -PreSigned（build.ps1 逐个校验签名有效才往下走）；无签名链时退回旧的剥签名行为。
           $isccArgs = @('-PackageOnly')
           if ('${{ steps.secrets.outputs.signpath }}' -eq 'true') { $isccArgs += '-PreSigned' }
+          if ($env:BUNDLED_VOICE_DIR) { $isccArgs += @('-VoiceModelDir', $env:BUNDLED_VOICE_DIR) }
+          if ($env:BUNDLED_PUNCT_DIR) { $isccArgs += @('-PunctuationModelDir', $env:BUNDLED_PUNCT_DIR) }
+          if ($env:BUNDLED_HR_DIR)    { $isccArgs += @('-HrDir', $env:BUNDLED_HR_DIR) }
+          if ($env:BUNDLED -eq '1')   { $isccArgs += '-BuildLabel', 'bundled' }
           powershell -NoProfile -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1 @isccArgs
 
       # —— SignPath 签名第二段：安装包外层 ——
@@ -276,7 +390,7 @@ jobs:
           cd target/installer
           sha256sum ./*.exe | tee SHA256SUMS
           RUNNER_OS_NAME="$(powershell -NoProfile -Command '(Get-CimInstance Win32_OperatingSystem).Caption' | tr -d '\r')"
-          jq -n --arg version "$VERSION" --arg tag "$GITHUB_REF_NAME" --arg commit "$GITHUB_SHA" \
+          jq -n --arg version "$VERSION" --arg tag "${BASE_TAG:-$GITHUB_REF_NAME}" --arg commit "$GITHUB_SHA" \
             --arg built_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg toolchain "$(rustc --version)" \
             --arg runner "$RUNNER_OS_NAME" --arg data_sha256 "$DATA_SHA256" --arg model_sha256 "$MODEL_SHA256" \
             '{version: $version, tag: $tag, commit: $commit, built_at: $built_at, toolchain: $toolchain, runner: $runner, data_sha256: $data_sha256, model_sha256: $model_sha256}' \
@@ -292,13 +406,40 @@ jobs:
           else
             printf '\n> 内测版没有代码签名：安装时 SmartScreen 拦截请点「更多信息 → 仍要运行」；任务栏搜索、「设置」等系统应用里候选窗口可能被遮挡。\n' >> "$RUNNER_TEMP/notes.md"
           fi
-          gh release create "$GITHUB_REF_NAME" --title "字在 Windows $VERSION" --notes-file "$RUNNER_TEMP/notes.md" \
-            target/installer/*.exe target/installer/SHA256SUMS target/installer/build-info.json
+          # bundled 变体：把 asset 追加到 BASE_TAG 上的 release（标准 windows-v0.1.11 那条），不创建新 release。
+          # sha256SUMS + build-info.json 同时也只放一份，按标准 release 算；bundled 这次只追加 .exe。
+          if [[ "${BUNDLED:-0}" == '1' ]]; then
+            TARGET_TAG="$BASE_TAG"
+            # 让 release notes 里多一段「本安装包含本地模型」说明
+            printf '\n\n## 本安装包含本地模型\n\n- SenseVoice（int8，约 215 MB）：语音识别核心。许可参见 sherpa-onnx 项目（Apache-2.0）。\n- 标点恢复 CT-Transformer（约 75 MB）：识别后自动加标点。许可见 k2-fsa/sherpa-onnx（Apache-2.0）。\n- 同音词替换 FST + lexicon（约 1.4 MB）：识别结果里的同音词替换。许可见 k2-fsa/sherpa-onnx（Apache-2.0）。\n- 本地整句模型 model.qjm（约 56 MB）：服务器侧整句重排。许可见训练仓库导出声明。\n\n装机到另一台机器就不需要联网下模型，第一次启用语音即可用。安装包比标准版大约 +270 MB。\n' >> "$RUNNER_TEMP/notes.md"
+            # 把追加的公告段写到一个临时文件供后续 notes 用：append 到既有 notes 不行（gh release upload --notes
+            # 是覆盖整个 release notes；这里只追加一次，发布后由维护者手工往下写）。
+            tmp="$(mktemp -d)"
+            echo "$RUNNER_TEMP/notes.md" > "$tmp/orig"
+          else
+            TARGET_TAG="$GITHUB_REF_NAME"
+          fi
+          if [[ "${BUNDLED:-0}" == '1' ]]; then
+            # bundled：只追加 asset 到既有 release。
+            gh release upload "$TARGET_TAG" --clobber target/installer/Zizai-*-bundled-Setup.exe
+          else
+            # 标准：新建 release。
+            gh release create "$TARGET_TAG" --title "字在 Windows $VERSION" --notes-file "$RUNNER_TEMP/notes.md" \
+              target/installer/*.exe target/installer/SHA256SUMS target/installer/build-info.json
+          fi
 
       - name: Generate releases.json
         env:
           GH_TOKEN: ${{ github.token }}
-        run: tools/release/publish-releases-json.sh "$GITHUB_REF_NAME" target/installer
+        run: |
+          # bundled 变体的 asset 已追加到 BASE_TAG 上的 release；releases.json 也按 BASE_TAG 重生成，
+          # 这样官网 latest 仍然指向标准包的版本号，新增的 bundled asset 出现在该条 release 的 assets 里。
+          if [[ "${BUNDLED:-0}" == '1' ]]; then
+            EFFECTIVE_TAG="$BASE_TAG"
+          else
+            EFFECTIVE_TAG="$GITHUB_REF_NAME"
+          fi
+          tools/release/publish-releases-json.sh "$EFFECTIVE_TAG" target/installer
 
       - name: Trigger website build
         if: steps.secrets.outputs.website == 'true'
