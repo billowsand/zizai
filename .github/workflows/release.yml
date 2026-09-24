@@ -63,12 +63,14 @@ jobs:
         run: |
           VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' apps/windows/server/Cargo.toml | head -1)"
           TAG="${GITHUB_REF_NAME#windows-v}"
-          # bundled 变体：windows-v0.1.11-bundled 指向同一份 0.1.11 commit，asset 上传到该 release 上。
-          # 去掉 -bundled 后缀再比版本号，源 release 名同步去掉。
+          # bundled 变体：windows-v0.1.11-bundled 指向同一份 0.1.11 commit（也可能指向更早已发版的 commit），
+          # asset 上传到该 release 上。去掉 -bundled 后缀再比版本号。
           if [[ "$TAG" == *-bundled ]]; then
             TAG="${TAG%-bundled}"
             echo "BUNDLED=1" >> "$GITHUB_ENV"
             echo "BASE_TAG=windows-v$TAG" >> "$GITHUB_ENV"
+            # bundled 跳过「main 祖先」检查：tag 是补发在历史已发版的 commit 上。
+            echo "allow_history_tag=1" >> "$GITHUB_ENV"
           fi
           if [[ "$VERSION" != "$TAG" ]]; then
             echo "apps/windows/server/Cargo.toml 是 $VERSION，标签是 $GITHUB_REF_NAME，先改版本号再打标签" >&2
@@ -79,9 +81,13 @@ jobs:
             exit 1
           fi
           git fetch --no-tags origin main
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "标签 $GITHUB_REF_NAME 指向的提交 $GITHUB_SHA 不在 main 上，先合并再发" >&2
-            exit 1
+          if [[ "${allow_history_tag:-0}" != '1' ]]; then
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+              echo "标签 $GITHUB_REF_NAME 指向的提交 $GITHUB_SHA 不在 main 上，先合并再发" >&2
+              exit 1
+            fi
+          else
+            echo "bundled 变体：跳过 main 祖先检查（allow-history-tag=1）"
           fi
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
