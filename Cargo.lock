@@ -4188,7 +4188,7 @@ dependencies = [
 
 [[package]]
 name = "qingjian-windows-server"
-version = "0.1.11"
+version = "0.1.12-dev"
 dependencies = [
  "dotenvy",
  "embed-manifest",
@@ -4212,7 +4212,7 @@ dependencies = [
 
 [[package]]
 name = "qingjian-windows-settings"
-version = "0.1.11"
+version = "0.1.12-dev"
 dependencies = [
  "jiff",
  "qingjian-core",
@@ -4228,7 +4228,7 @@ dependencies = [
 
 [[package]]
 name = "qingjian-windows-settings-egui"
-version = "0.1.11"
+version = "0.1.12-dev"
 dependencies = [
  "cpal",
  "eframe",
@@ -4247,7 +4247,7 @@ dependencies = [
 
 [[package]]
 name = "qingjian-windows-tsf"
-version = "0.1.11"
+version = "0.1.12-dev"
 dependencies = [
  "qingjian-core",
  "qingjian-platform",
@@ -4261,7 +4261,7 @@ dependencies = [
 
 [[package]]
 name = "qingjian-windows-voice-worker"
-version = "0.1.11"
+version = "0.1.12-dev"
 dependencies = [
  "qingjian-platform",
  "qingjian-voice",
