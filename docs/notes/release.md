@@ -5,14 +5,17 @@
 
 ## 一次发版做什么
 
-1. 改 `apps/windows/{server,tsf,settings}/Cargo.toml` 的 `version`（三个一起改；打包脚本与 workflow 读 `server` 那份）。
+1. 改 `apps/windows/{server,tsf,settings,voice-worker,settings-egui}/Cargo.toml` 的 `version`（五处一起改；打包脚本与 workflow 读 `server` 那份）。
+   别只改 `server`：`tsf`、`settings`、`voice-worker`、`settings-egui` 漏改会发出版本号不一致的工件（最近一次就栽在这里，补了一次 `chore(release): 锁文件对齐 …`），按这份清单五份一一覆盖。
    **发版之间版本号一直带 `-dev`**（Rust nightly / Firefox Nightly 那套）：Cargo.toml 写 `0.1.3-dev`，`build.ps1` 打包时再接上 git 短哈希，
    本地装的、CI 中间构建的都显示 `0.1.3-dev-1a2b3c4`（工作区有改动加 `+`），测试时一眼知道装的是哪个提交；版本号干净的一定是线上包；
    带 `-dev` 的标签 CI 直接拒绝。Inno 的 `VersionInfoVersion` 只认数字点号，`build.ps1` 去掉后缀再传，安装包与 DLL 文件名保留完整版本。
 2. `CHANGELOG.md` 顶上加一节 `## <版本> · <日期> · <渠道>`（渠道是 `alpha` / `beta` / `rc` / `stable`），一行一条、面向用户的措辞。
-   **更新日志手写，不由提交自动生成**：提交信息里有大量内部改动（拆模块、修 RefCell 重入），用户看不懂也不关心；
-   做法是发版前按上个标签以来的 `git log` 起草几条，人审一遍再定稿。
-3. 提交，打注释标签并推：`git tag -a windows-v0.1.3 -m "青简 Windows 0.1.3" && git push origin main windows-v0.1.3`
+   提交信息里有大量内部改动（拆模块、修 RefCell 重入、改 IPC 协议），用户看不懂也不关心，最终定稿必须**面向用户**——
+   内部用词（「`Sentence` kind 置位」「`StepDown` 接管」「`StepDown` 事件」这类）一律换掉。
+   起稿可以交给 LLM：发版前按上个标签以来的 `git log` 让模型列条目，再由维护者审一遍、剔掉内部词、把同质改动合并，最后人签字再定稿。
+   模板本身就当系统提示给模型（见附录）。
+3. 提交，打注释标签并推：`git tag -a windows-v0.1.3 -m "字在 Zizai Windows 0.1.3" && git push origin main windows-v0.1.3`
    （标签带平台前缀 `windows-v*`，与上游的 `macos-v*` 区分；旧的 `v*` 标签仍能被官网识别，向后兼容）。
 4. 标签推出去之后紧接一个普通提交把版本号改成下一个开发版（只是改 Cargo.toml，不打标签、不建 Release；-dev 版本永远没有标签与 Release）。
 5. `release.yml` 跑完后 GitHub Release 上有 `Zizai-<版本>-Setup.exe`、`SHA256SUMS`、`build-info.json`（提交、构建时间、工具链）、`releases.json`。
@@ -111,3 +114,42 @@ cargo 命令全 `--locked`（含 `build.ps1`）。普通 CI 只有 `contents: re
 成品在 `target\installer\Zizai-<版本>-Setup.exe`。数据或脚本改了、二进制没变时加 `-SkipBuild`；`-Sign` 用自签证书签产物（本机真机测用）。
 **对外分发的包不要本地打**：走 `release.yml`（SignPath 签名，见 docs/design/code-signing.md）。CI 分段用的
 `-NoPackage`（只构建）与 `-PackageOnly -PreSigned`（产物已被 SignPath 签回，打包前校验签名）一般只在 workflow 里用。
+
+## 附录：CHANGELOG 起稿提示词模板
+
+发版前把下面这段作为系统提示喂给模型，再把 `git log <上一个 windows-v* 标签>..HEAD --oneline` 的输出贴进用户消息。
+模型只起稿，正文逐行人审。
+
+```
+你是「字在 Zizai」输入法的发版日志起草助手。维护者会审你写的每一条，必须 100% 面向用户、不带任何实现细节。
+
+## 任务
+- 输入：自上一个 windows-v* 标签以来的提交列表（Conventional Commits，第一行：<类型>(<范围>): <说明>）。
+- 输出：一个版本节草稿，标题 ## <新版本> · <今天> · beta，一行一条 bullet，写入 CHANGELOG.md。
+
+## 必守规则
+1. **必须能讲成普通用户感受得到的事**。用户能感知的行为才有资格进 CHANGELOG：
+   改了什么键、改了什么默认行为、改了候选 / 排序 / 主题 / 语音档位、修了一个「我会撞到」的 bug——
+   任何一条都得让人读了能说「哦，这个我以前/现在能/不能……」。
+2. **不能用工程内部词**。以下都是禁词，出现就改写或删：
+   「StepDown」「FILE_FLAG_FIRST_PIPE_INSTANCE」「互斥体」「manifest」「embed-manifest」「uiAccess」
+   「RefCell 重入」「IPC 协议」「自绘」「DLL」「Server 进程」「Worker」「Candidate」「CandidateKind」
+   「Sentence」「整句路径」「LM」「bigram」「bigram 模型」「Local\Qingjian\… 事件名」「build.rs」
+   「cross_join」「cfg」「dev」「-dev」后缀、「管道」「私有方法」「… impl 」的实施细节
+   （实施细则词以 docs/design 与 crates/ 里的类型名为准，凡是不在 docs/user/ 的概念都不出现）。
+3. 同一类别的提交合并成一条；零散提交若用户感觉不到也合并或舍弃。
+4. 中文，简洁，一句话内可以；超过两句就拆。
+5. 末尾给出该版本最关键的「已知问题」（无签名时写明候选窗在哪些界面被遮、SmartScreen 拦截提示；
+   改动影响大但用户可能受惊时也写一条，例如「英文模式不再弹候选窗」已经发过的本版不必再写）。
+
+## 不要做的事
+- 不要解释为什么改、不要写修这个 bug 的根因
+- 不要带提交短哈希
+- 不要写「优化」「重构」这种空话，要写「**做**了什么」「**修了**什么」
+- 任何字段不确定宁可省略也不要编
+
+## 提交示例
+- feat(voice): 添加语音停顿自动完成 → 「语音输入自动完成：停顿约 1.2 秒后自动结束并写入输入框，可在设置里关」
+- refactor(windows): 单实例换成互斥体 + 构建标记，按会话号分管道 → 不出现在 CHANGELOG（用户感知不到）
+- fix(core): 辅码筛空时回车 / 空格上屏整串，不再只剩主码 → 「辅码缩到没候选时，回车 / 空格上屏完整编码」
+```
