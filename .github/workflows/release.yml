@@ -112,27 +112,38 @@ jobs:
       # 在这步预先把 archive 拉到 target/ 下、解到固定路径，并把 SHERPA_ONNX_LIB_DIR 告诉 build.rs，
       # 让它直接用本地提取出的 lib，不再依赖自动下载。具体版本随 Cargo.lock 的 sherpa-onnx-sys 走，
       # 升 sherpa 时这一行也要跟着改。lock 文件改后强制回到这个版本。
+      # 用 PowerShell（自带 bsdtar，支持 bz2），避开 shell 路径错位。
       - name: Pre-fetch sherpa-onnx native lib
-        shell: bash
+        shell: pwsh
         run: |
-          SHERPA_VER=$(grep -A1 '^name = "sherpa-onnx-sys"' Cargo.lock | grep version | head -1 | sed -E 's/.*version = "(.*)"/\1/')
-          if [[ -z "$SHERPA_VER" ]]; then
-            echo "从 Cargo.lock 读不出 sherpa-onnx-sys 版本" >&2
+          $content = Get-Content Cargo.lock -Raw
+          if ($content -match '(?ms)^name\s*=\s*"sherpa-onnx-sys"\s*\nversion\s*=\s*"([^"]+)"') {
+            $SHERPA_VER = $Matches[1]
+          } else {
+            Write-Error "从 Cargo.lock 读不出 sherpa-onnx-sys 版本"
             exit 1
-          fi
-          echo "sherpa-onnx-sys 版本：$SHERPA_VER"
-          URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/v${SHERPA_VER}/sherpa-onnx-v${SHERPA_VER}-win-x64-static-MT-Release-lib.tar.bz2"
-          OUT_DIR="target/sherpa-onnx-prebuilt/sherpa-onnx-v${SHERPA_VER}-win-x64-static-MT-Release-lib"
-          rm -rf target/sherpa-onnx-prebuilt
-          mkdir -p "$OUT_DIR"
-          curl.exe -L --fail --show-error --retry 5 --retry-delay 5 \
-            -o "$OUT_DIR/../lib.tar.bz2" "$URL"
-          cd "$OUT_DIR/.."
-          tar -xjf "lib.tar.bz2"
-          rm "lib.tar.bz2"
-          ls "$OUT_DIR/lib" | head
-          # 给后续 Build binaries step 用
-          echo "SHERPA_ONNX_LIB_DIR=$(pwd)/${OUT_DIR##*/}/lib" >> "$GITHUB_ENV"
+          }
+          Write-Host "sherpa-onnx-sys 版本：$SHERPA_VER"
+          $URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v${SHERPA_VER}/sherpa-onnx-v${SHERPA_VER}-win-x64-static-MT-Release-lib.tar.bz2"
+          $Root = "target/sherpa-onnx-prebuilt"
+          $Extracted = Join-Path $Root "sherpa-onnx-v${SHERPA_VER}-win-x64-static-MT-Release-lib"
+          if (Test-Path $Root) { Remove-Item -Recurse -Force $Root }
+          New-Item -ItemType Directory -Path $Root | Out-Null
+          $bz2 = Join-Path $Root "lib.tar.bz2"
+          Invoke-WebRequest -Uri $URL -OutFile $bz2
+          # pwsh 自带 bsdtar 处理 .tar.bz2；archive 由 GitHub release tag v<ver> 锁定。
+          tar -xjf $bz2 -C $Root
+          Remove-Item $bz2
+          $LibFile = Join-Path $Extracted 'lib/sherpa-onnx-c-api.lib'
+          if (-not (Test-Path $LibFile)) {
+            Write-Error "提取后没找到 $LibFile"
+            Get-ChildItem -Recurse $Root | Select-Object FullName -First 30
+            exit 1
+          }
+          Get-ChildItem (Join-Path $Extracted 'lib') | Select-Object Name -First 10
+          # 给后续 Build binaries step 用：写绝对路径，pwsh 的 tar 路径不带反斜杠奇异
+          "SHERPA_ONNX_LIB_DIR=$((Resolve-Path (Join-Path $Extracted 'lib')).Path)" `
+            | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build binaries
         shell: pwsh
