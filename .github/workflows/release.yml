@@ -106,9 +106,38 @@ jobs:
           mv data/model.qjm data/model/
           ls -la data/generated data/generated/dicts data/model
 
+      # sherpa-onnx-sys（语音 Worker 与 Server 间接依赖）的 build.rs 默认会从 GitHub release 下载预编译
+      # Windows 静态库，但 release 构建常常因为 runner 上 swatinem/rust-cache 命中导致 build.rs 重跑时找不到
+      # OUT_DIR 内的提取产物（`could not find native static library sherpa-onnx-c-api`，链接阶段报错）。
+      # 在这步预先把 archive 拉到 target/ 下、解到固定路径，并把 SHERPA_ONNX_LIB_DIR 告诉 build.rs，
+      # 让它直接用本地提取出的 lib，不再依赖自动下载。具体版本随 Cargo.lock 的 sherpa-onnx-sys 走，
+      # 升 sherpa 时这一行也要跟着改。lock 文件改后强制回到这个版本。
+      - name: Pre-fetch sherpa-onnx native lib
+        shell: bash
+        run: |
+          SHERPA_VER=$(grep -A1 '^name = "sherpa-onnx-sys"' Cargo.lock | grep version | head -1 | sed -E 's/.*version = "(.*)"/\1/')
+          if [[ -z "$SHERPA_VER" ]]; then
+            echo "从 Cargo.lock 读不出 sherpa-onnx-sys 版本" >&2
+            exit 1
+          fi
+          echo "sherpa-onnx-sys 版本：$SHERPA_VER"
+          URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/v${SHERPA_VER}/sherpa-onnx-v${SHERPA_VER}-win-x64-static-MT-Release-lib.tar.bz2"
+          OUT_DIR="target/sherpa-onnx-prebuilt/sherpa-onnx-v${SHERPA_VER}-win-x64-static-MT-Release-lib"
+          rm -rf target/sherpa-onnx-prebuilt
+          mkdir -p "$OUT_DIR"
+          curl.exe -L --fail --show-error --retry 5 --retry-delay 5 \
+            -o "$OUT_DIR/../lib.tar.bz2" "$URL"
+          cd "$OUT_DIR/.."
+          tar -xjf "lib.tar.bz2"
+          rm "lib.tar.bz2"
+          ls "$OUT_DIR/lib" | head
+          # 给后续 Build binaries step 用
+          echo "SHERPA_ONNX_LIB_DIR=$(pwd)/${OUT_DIR##*/}/lib" >> "$GITHUB_ENV"
+
       - name: Build binaries
         shell: pwsh
         # -NoPackage：只构建。签回后再 -PackageOnly -PreSigned 打包，已签文件被 Inno 原样拷进安装包。
+        # SHERPA_ONNX_LIB_DIR 由上游 Pre-fetch step 注入；build.rs 看这个变量就会跳过 GitHub 下载。
         run: powershell -NoProfile -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1 -NoPackage
 
       # —— SignPath 签名第一段：TSF DLL 64/32 位、Server、语音 Worker、设置程序 ——
