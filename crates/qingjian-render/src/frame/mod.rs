@@ -27,10 +27,6 @@ pub struct Frame {
 
     /// 拼音行右侧的一句临时状态（删了什么词），有它时不画整句补全。
     pub status: Option<String>,
-
-    /// 拼音行末尾的辅码「下一键」幽灵提示（` s`，含前导空格），只敲了首码时才有；画淡。
-    /// 放拼音行而不放候选旁，是因为候选框高度会随候选行的标注行出现 / 消失而变。
-    pub fuma_hint: Option<String>,
 }
 
 impl Frame {

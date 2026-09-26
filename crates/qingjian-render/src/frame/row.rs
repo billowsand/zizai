@@ -18,6 +18,10 @@ pub struct Row {
 
     /// 本地整句模型拼出的整句：词后右上角画一个小星标，与词库里现成的词区分。
     pub sentence: bool,
+
+    /// 词后右上角的淡色小字（辅码：还要敲的码 `s`，学码时完整两码 `ms`）。跟在词的同一行，
+    /// 不像 annotation 那样另起一行，所以有没有它候选框高度都不变。
+    pub corner: Option<String>,
 }
 
 impl Row {
@@ -29,6 +33,7 @@ impl Row {
             annotation: Vec::new(),
             cloud: false,
             sentence: false,
+            corner: None,
         }
     }
 }

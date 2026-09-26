@@ -19,6 +19,13 @@ const SHUANGPIN: [(&str, &str); 5] = [
 /// 辅码方案：界面名 + 配置写法（空串为关）。
 const FUMA: [(&str, &str); 2] = [("关", ""), ("小鹤辅码", "xiaohe")];
 
+/// 候选显示辅码的档位：界面名 + 配置写法（见 `FumaHint`）。
+const FUMA_HINT: [(&str, &str); 3] = [
+    ("敲了辅码时", "typed"),
+    ("始终（学码）", "always"),
+    ("不显示", "off"),
+];
+
 /// 翻页键对：界面名 + 配置写法。
 const PAGE_KEYS: [(&str, &str); 3] = [
     ("方括号 [ ]", "[]"),
@@ -63,6 +70,24 @@ pub(crate) fn view(settings: &mut Settings, ui: &mut egui::Ui) {
                         let (response, picked) = combo(ui, "fuma", &FUMA, &fuma);
                         if let Some(value) = picked {
                             settings.save("general", "fuma", value);
+                        }
+                        response
+                    })
+                    .inner
+                },
+            );
+            let fuma_hint = settings.config.general.fuma_hint.clone();
+            let enabled = enabled && !fuma.trim().is_empty();
+            list.row(
+                "\u{E890}",
+                "候选显示辅码",
+                "在候选右上角用淡色小字标辅码。敲了第一码后标出还要敲的第二码；「始终」在没敲辅码时也标出完整两码，适合还在记码的时候。",
+                |ui| {
+                    ui.add_enabled_ui(enabled, |ui| {
+                        let (response, picked) =
+                            combo(ui, "fuma-hint", &FUMA_HINT, fuma_hint.trim());
+                        if let Some(value) = picked {
+                            settings.save("general", "fuma_hint", value);
                         }
                         response
                     })

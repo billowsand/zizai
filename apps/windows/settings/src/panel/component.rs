@@ -37,6 +37,9 @@ impl Component for Settings {
             Message::Fuma(Some(i)) if i < general::FUMA.len() => {
                 self.save("general", "fuma", general::FUMA[i].1);
             }
+            Message::FumaHint(Some(i)) if i < general::FUMA_HINT.len() => {
+                self.save("general", "fuma_hint", general::FUMA_HINT[i].1);
+            }
 
             // 通用页 · 按键
             Message::PageKeys(Some(i)) if i < general::PAGE_KEYS.len() => {

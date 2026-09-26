@@ -1,4 +1,4 @@
-use qingjian_core::{FumaScheme, ShuangpinScheme};
+use qingjian_core::{FumaHint, FumaScheme, ShuangpinScheme};
 use serde::{Deserialize, Serialize};
 
 use super::{ColorScheme, LogLevel, PreeditMode};
@@ -57,6 +57,10 @@ pub struct GeneralConfig {
     /// 组句中末尾敲的大写字母当辅码键，严格过滤候选。
     pub fuma: String,
 
+    /// 候选右上角标辅码：`typed`（缺省，只敲了首码时标第二码）/ `always`（学码：没敲时也标两码）/ `off`。
+    /// 见 [`FumaHint`]。
+    pub fuma_hint: String,
+
     /// 日志级别，缺省 info（不含用户敲的内容）。
     pub log_level: LogLevel,
 
@@ -82,6 +86,7 @@ impl Default for GeneralConfig {
             english_full_width_punctuation: false,
             shuangpin: String::new(),
             fuma: String::new(),
+            fuma_hint: FumaHint::default().key().to_owned(),
             log_level: LogLevel::default(),
             input_log: true,
             learning: true,
@@ -123,6 +128,17 @@ impl GeneralConfig {
             Err(_) => {
                 tracing::warn!(key, "不认识的辅码方案，按关");
                 None
+            }
+        }
+    }
+
+    /// 候选标辅码的档位；写得不认识时按缺省。
+    pub fn fuma_hint(&self) -> FumaHint {
+        match self.fuma_hint.parse() {
+            Ok(hint) => hint,
+            Err(_) => {
+                tracing::warn!(key = %self.fuma_hint, "不认识的辅码显示档位，按缺省");
+                FumaHint::default()
             }
         }
     }
@@ -182,6 +198,11 @@ mod tests {
         assert_eq!(general.fuma(), Some(FumaScheme::Xiaohe));
         general.fuma = "zrm".to_owned();
         assert_eq!(general.fuma(), None);
+        assert_eq!(general.fuma_hint(), FumaHint::Typed);
+        general.fuma_hint = "always".to_owned();
+        assert_eq!(general.fuma_hint(), FumaHint::Always);
+        general.fuma_hint = "sometimes".to_owned();
+        assert_eq!(general.fuma_hint(), FumaHint::Typed);
         general.shuangpin = " Sogou ".to_owned();
         assert_eq!(general.shuangpin(), Some(ShuangpinScheme::Sogou));
         general.shuangpin = "flypy".to_owned();

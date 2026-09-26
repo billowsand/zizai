@@ -78,11 +78,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let shadow = (!args.no_shadow).then_some(Shadow::mac_panel());
 
-    let scenes: [(&str, Frame); 6] = [
+    let scenes: [(&str, Frame); 8] = [
         ("nihao", nihao()),
         ("nihao-sentence", nihao_with_sentence()),
         ("cloud", cloud()),
         ("local-sentence", local_sentence()),
+        ("fuma", fuma()),
+        ("fuma-always", fuma_always()),
         ("corrected", corrected_japanese()),
         ("probe", probe()),
     ];
@@ -226,7 +228,6 @@ fn nihao() -> Frame {
         footer: Some("1/6".to_owned()),
         sentence: None,
         status: None,
-        fuma_hint: None,
     }
 }
 
@@ -262,6 +263,51 @@ fn local_sentence() -> Frame {
         Row::plain(2, "我"),
         Row::plain(3, "窝"),
     ];
+    frame.footer = None;
+    frame
+}
+
+/// 辅码只敲了首码（`ljm`）：首码对上的候选右上角淡色标第二码，蓝莓 这类不标。
+fn fuma() -> Frame {
+    let mut frame = nihao();
+    frame.preedit = Some(Preedit::plain("lan'm", 5));
+    let marked = [
+        ("栏目", Some("k")),
+        ("栏", Some("s")),
+        ("榄", Some("e")),
+        ("阑", Some("j")),
+    ];
+    frame.rows = marked
+        .iter()
+        .chain(&[("蓝莓", None), ("蓝猫", None), ("烂漫", None)])
+        .enumerate()
+        .map(|(i, (text, corner))| Row {
+            corner: corner.map(str::to_owned),
+            ..Row::plain(i, *text)
+        })
+        .collect();
+    frame.footer = None;
+    frame
+}
+
+/// 学码档没敲辅码（`lj`）：每个候选标完整两码。
+fn fuma_always() -> Frame {
+    let mut frame = nihao();
+    frame.preedit = Some(Preedit::plain("lan", 3));
+    frame.rows = [
+        ("蓝", "cm"),
+        ("兰", "bs"),
+        ("拦", "tl"),
+        ("栏", "ms"),
+        ("篮", "zj"),
+    ]
+    .iter()
+    .enumerate()
+    .map(|(i, (text, corner))| Row {
+        corner: Some((*corner).to_owned()),
+        ..Row::plain(i, *text)
+    })
+    .collect();
     frame.footer = None;
     frame
 }
@@ -314,7 +360,6 @@ fn corrected_japanese() -> Frame {
         footer: None,
         sentence: None,
         status: Some("已删除「开放」".to_owned()),
-        fuma_hint: None,
     }
 }
 
@@ -327,7 +372,6 @@ fn probe() -> Frame {
         footer: None,
         sentence: None,
         status: None,
-        fuma_hint: None,
     }
 }
 
@@ -341,5 +385,6 @@ fn annotated(index: usize, text: &str, annotation: &[(&str, Tone)], cloud: bool)
             .collect(),
         cloud,
         sentence: false,
+        corner: None,
     }
 }

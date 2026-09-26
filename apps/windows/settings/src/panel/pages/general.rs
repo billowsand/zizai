@@ -19,6 +19,13 @@ pub(crate) const SHUANGPIN: [(&str, &str); 5] = [
 /// 辅码方案：界面名 + 配置写法（空串为关）。
 pub(crate) const FUMA: [(&str, &str); 2] = [("关（不启用辅码）", ""), ("小鹤辅码", "xiaohe")];
 
+/// 候选显示辅码的档位：界面名 + 配置写法（见 `FumaHint`）。
+pub(crate) const FUMA_HINT: [(&str, &str); 3] = [
+    ("敲了辅码时", "typed"),
+    ("始终（学码）", "always"),
+    ("不显示", "off"),
+];
+
 /// 翻页键对：界面名 + 配置写法。
 pub(crate) const PAGE_KEYS: [(&str, &str); 3] = [
     ("方括号 [ ]", "[]"),
@@ -63,6 +70,12 @@ fn scheme_group(settings: &Settings, context: &mut ViewContext<Settings>) -> Vie
     let g = &settings.config.general;
     let fuma = string_combo(&FUMA, &g.fuma, context.callback(Message::Fuma))
         .is_enabled(!g.shuangpin.trim().is_empty());
+    let fuma_hint = string_combo(
+        &FUMA_HINT,
+        g.fuma_hint.trim(),
+        context.callback(Message::FumaHint),
+    )
+    .is_enabled(!g.shuangpin.trim().is_empty() && !g.fuma.trim().is_empty());
     group(
         Symbol::Character,
         "输入方案",
@@ -82,6 +95,12 @@ fn scheme_group(settings: &Settings, context: &mut ViewContext<Settings>) -> Vie
                 "辅码",
                 "开双拼后可用：打完双拼再敲两个大写辅码键严格筛选候选（首字第 1 码 + 末字第 1 码，单字取两码），对不上就不出候选；第一码大写表示反转顺序。辅码键不是要打的内容。",
                 fuma,
+            ),
+            field(
+                Symbol::View,
+                "候选显示辅码",
+                "在候选右上角用淡色小字标辅码。敲了第一码后标出还要敲的第二码；「始终」在没敲辅码时也标出完整两码，适合还在记码的时候。",
+                fuma_hint,
             ),
         ],
     )

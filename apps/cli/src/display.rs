@@ -134,7 +134,7 @@ pub fn show_typing(engine: &mut Engine, input: &str) {
     engine.set_input("");
 }
 
-/// 候选词左对齐，右侧是「词性 译文」，多条释义用 · 分隔。
+/// 候选词左对齐，右侧是「辅码 词性 译文」，多条释义用 · 分隔。
 fn format_candidate(candidate: &Candidate, width: usize) -> String {
     let padding = " ".repeat(width.saturating_sub(display_width(&candidate.text)) + 2);
     let reading = candidate
@@ -175,9 +175,18 @@ fn format_candidate(candidate: &Candidate, width: usize) -> String {
         qingjian_core::CandidateKind::Sentence => "[句] ",
         qingjian_core::CandidateKind::Emoji => "",
     };
-    format!("{}{padding}{marker}{reading}{annotation}", candidate.text)
-        .trim_end()
-        .to_owned()
+    // 候选窗右上角那几个淡色辅码字母
+    let fuma = candidate
+        .fuma
+        .as_ref()
+        .map(|codes| format!("[辅码 {codes}] "))
+        .unwrap_or_default();
+    format!(
+        "{}{padding}{marker}{fuma}{reading}{annotation}",
+        candidate.text
+    )
+    .trim_end()
+    .to_owned()
 }
 
 /// 终端显示宽度：CJK 算两格。够 CLI 对齐用，不引入 unicode-width。

@@ -15,12 +15,6 @@ impl Renderer {
         let mut width = 0.0;
         if let Some(preedit) = &frame.preedit {
             width += self.measure(&preedit.text(), &style).width + m.px(CARET_WIDTH);
-            // 辅码「下一键」提示紧跟拼音，量的是淡色样式
-            if let Some(hint) = &frame.fuma_hint {
-                width += self
-                    .measure(hint, &m.annotation_style(m.theme.colors.pos))
-                    .width;
-            }
         }
         if let Some((text, cloud)) = frame.trailing() {
             if frame.preedit.is_some() {
@@ -51,11 +45,6 @@ impl Renderer {
         let mut x = left + m.padding();
         if let Some(preedit) = &frame.preedit {
             x += self.draw_preedit(canvas, m, preedit, x, top, line_height);
-            // 只敲了辅码首码：把高亮候选的第二码画成淡色幽灵字，告诉用户下一键敲什么
-            if let Some(hint) = &frame.fuma_hint {
-                let style = m.annotation_style(m.theme.colors.pos);
-                x += self.draw_text(canvas, hint, &style, x, top);
-            }
             if frame.trailing().is_some() {
                 x += m.px(SENTENCE_GAP);
             }

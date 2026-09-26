@@ -28,11 +28,12 @@ TSV 解析、查询与生成工具把 `lue` / `nue` 统一成 `lve` / `nve`。
   上屏消耗：两码那档盖满拼音就连 2 键一起吃，盖不满的由 `commit::consume_scope` 丢掉；
   首码那档由 `commit::consumed_first_code` 判断——盖满辅码键之前那段拼音、首码又对得上的才多吃那一键，
   普通前缀候选（蓝）不吃，那一键留着当下一个字的声母。`take_raw` 剥两码那档；`delete_syllable_backward` / 音节光标跳认辅码键为字母。
-  显示：`Candidate::fuma` 是这条候选自己的两码（敲了辅码才填）；只敲首码时 Server 取高亮候选的第二码
-  淡画在拼音行末尾当「下一键」幽灵提示（`fuma_hint`，标在候选旁会让候选框高度跟着变）；
+  显示：`Candidate::fuma` 是候选右上角要标的码（`Engine::fuma_mark`，档位 `FumaHint` / `[general] fuma_hint`）：
+  只敲首码时首码对上的候选标第二码，学码档（`always`）没敲时标完整两码，两码敲满不标；只标词库词与整句。
+  Server 映射成渲染器 `Row::corner`，画在词后右上角同一行（序号字号、淡色），不进 annotation——标注行会让候选框高度跟着变；
   `Query::fuma` 是要补画进拼音行的辅码段（只有两码那档，首码那档的键还在拼音里），
   经 `MarkedKind::Fuma` → `PreeditKind::Fuma` → `PreeditStyle::Fuma` 一路镜像，两条绘制路径都画淡。
-  配置 `[general] fuma`，`Engine::set_fuma` 收 `Arc<FumaTable>`（表几千条，Server 与 Engine 共用一份，热加载只克隆指针）/ `fuma_enabled`）/
+  配置 `[general] fuma` / `fuma_hint`，`Engine::set_fuma_hint`，`Engine::set_fuma` 收 `Arc<FumaTable>`（表几千条，Server 与 Engine 共用一份，热加载只克隆指针）/ `fuma_enabled`）/
   `engine`（`query::EnglishTail`：句末英文词并入整句，`woxiangxuehaorust` → 我想学好rust，尾段也像拼音时按分数与拼音读法比）。
 `Engine` 是对外唯一门面，`Translator` / `Learner` trait 在 `engine` 模块；词库是「主词库 + 附加词库（`set_extra_dictionaries`）+ 用户词」的列表。
 - 中英混输的英文词位置：`Engine::set_chinese_first`（配置 `[general] chinese_first`，缺省关）关着时拼音不像话的输入英文排第一（`extras::insert_english`，

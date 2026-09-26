@@ -102,6 +102,7 @@ impl Router {
     /// 辅码按新配置重接。启动时辅码是关的就没读过表，用户在设置里刚打开时现读一次，
     /// 否则开关只在重启后才生效。
     fn apply_fuma(&mut self, config: &Config) {
+        self.engine.set_fuma_hint(config.general.fuma_hint());
         let Some(scheme) = config.general.fuma() else {
             self.engine.set_fuma(None);
             return;

@@ -10,6 +10,8 @@ pub(crate) enum Message {
     Shuangpin(Option<usize>),
     /// 辅码方案下拉（关 / 小鹤辅码）。
     Fuma(Option<usize>),
+    /// 候选显示辅码下拉（敲了辅码时 / 始终 / 不显示）。
+    FumaHint(Option<usize>),
 
     // 通用页 · 按键
     PageKeys(Option<usize>),

@@ -228,6 +228,7 @@ fn build_engine(args: &Args) -> Result<Engine, CliError> {
             scheme.clone()
         };
     }
+    engine.set_fuma_hint(config.general.fuma_hint());
     if let Some(scheme) = config.general.fuma() {
         match load_fuma(&scheme) {
             Ok(table) => {

@@ -1,7 +1,7 @@
 //! 横排：候选排成一行，高亮那个下面单独一行译文，页码在行尾。
 
 use super::item::Item;
-use super::{HIGHLIGHT_INSET, INDEX_GAP, Metrics, Renderer};
+use super::{CORNER_GAP, HIGHLIGHT_INSET, INDEX_GAP, Metrics, Renderer};
 use crate::canvas::Canvas;
 use crate::frame::{Frame, Row};
 
@@ -60,6 +60,9 @@ impl Renderer {
                 }
                 if row.sentence {
                     text.width += m.sparkle_width();
+                }
+                if let Some(corner) = &row.corner {
+                    text.width += m.px(CORNER_GAP) + self.measure(corner, &m.corner_style()).width;
                 }
                 row_height = row_height.max(text.height + m.row_padding() * 2.0);
                 Item {

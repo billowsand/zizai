@@ -38,6 +38,13 @@ const SPARKLE_SIZE: f32 = 7.0;
 /// 整句星标与前面候选词的间距（点）。
 const SPARKLE_GAP: f32 = 1.5;
 
+/// 词后右上角小字（辅码）与前面候选词 / 星标的间距（点）。
+const CORNER_GAP: f32 = 1.0;
+
+/// 右上角小字的行框比候选词行框顶边再往上提多少（点）：序号字号的行框顶齐候选词行框时，
+/// 小写字母落在字身中部，提一点才像上标。
+const CORNER_RISE: f32 = 3.0;
+
 /// preedit 与右侧整句补全之间的间距（点）。
 const SENTENCE_GAP: f32 = 16.0;
 
@@ -101,6 +108,11 @@ impl Metrics<'_> {
 
     fn index_style(&self) -> TextStyle {
         self.style(self.theme.index_font, self.theme.colors.index)
+    }
+
+    /// 词后右上角小字：序号那档字号、淡色。
+    fn corner_style(&self) -> TextStyle {
+        self.style(self.theme.index_font, self.theme.colors.pos)
     }
 
     fn tone_color(&self, tone: Tone) -> Color {
@@ -235,7 +247,7 @@ impl Renderer {
         m.cloud_width()
     }
 
-    /// 候选词本体：云端词前带云朵、换颜色；整句候选词后右上角带星标。
+    /// 候选词本体：云端词前带云朵、换颜色；整句候选词后右上角带星标，辅码小字再跟在后面。
     fn draw_word(
         &mut self,
         canvas: &mut Canvas,
@@ -256,7 +268,9 @@ impl Renderer {
         };
         let style = m.style(m.theme.text_font, color);
         word_x += self.draw_text(canvas, &row.text, &style, word_x, top);
+        let mut corner_x = word_x;
         if row.sentence {
+            corner_x += m.sparkle_width();
             // 与字形顶部大致齐平：行框里字形垂直居中，顶上留出的空按行高的一成半估
             draw_sparkle(
                 canvas,
@@ -264,6 +278,15 @@ impl Renderer {
                 top + text_height * 0.15,
                 m.px(SPARKLE_SIZE),
                 m.theme.colors.accent,
+            );
+        }
+        if let Some(corner) = &row.corner {
+            self.draw_text(
+                canvas,
+                corner,
+                &m.corner_style(),
+                corner_x + m.px(CORNER_GAP),
+                top - m.px(CORNER_RISE),
             );
         }
     }
