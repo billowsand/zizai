@@ -8,6 +8,7 @@ use std::time::Instant;
 
 use qingjian_platform::{ColorScheme, Config};
 
+use crate::repair::RepairTask;
 use crate::{fonts, theme};
 
 /// 左侧导航的分节：tag + 界面名 + 图标码点。
@@ -48,6 +49,9 @@ pub(crate) struct Settings {
     /// 服务地址或模型名称最后一次编辑时间，用来合并连续输入的落盘。
     voice_polish_dirty_since: Option<Instant>,
 
+    /// 「高级 → 诊断与修复」的后台任务与进度。
+    pub(crate) repair: RepairTask,
+
     /// 上次解析出的系统明暗，变了换一套 Visuals。
     pub(crate) dark: bool,
 
@@ -81,6 +85,7 @@ impl Settings {
             voice_polish_url_edit,
             voice_polish_model_edit,
             voice_polish_dirty_since: None,
+            repair: RepairTask::new(&cc.egui_ctx),
             dark: theme::system_prefers_dark(),
             applied_scheme,
             started,

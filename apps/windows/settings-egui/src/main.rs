@@ -17,6 +17,8 @@ mod nav;
 #[cfg(windows)]
 mod pages;
 #[cfg(windows)]
+mod repair;
+#[cfg(windows)]
 mod theme;
 #[cfg(windows)]
 mod title_bar;
@@ -35,6 +37,10 @@ const MIN_WINDOW_SIZE: [f32; 2] = [620.0, 460.0];
 
 #[cfg(windows)]
 fn main() -> eframe::Result<()> {
+    // 「深度修复」提权再跑的那一份：做完清理就退，不开窗口。
+    if let Some(failures) = repair::run_elevated() {
+        std::process::exit(failures);
+    }
     let started = std::time::Instant::now();
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()

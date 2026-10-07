@@ -44,6 +44,20 @@ windows-registry.workspace = true
 cpal = "0.15"
 # 解 Logo 的 PNG（渲染器也用它），省得为一张图引 egui_extras 的图片加载器
 png.workspace = true
+# 「高级 → 诊断与修复」：查 / 拉起 Server（互斥体、管道、ShellExecuteEx）、校验它的签名、提权清理旧文件
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Cryptography",
+    "Win32_Security_WinTrust",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Pipes",
+    "Win32_System_Registry",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [target."cfg(windows)".build-dependencies]
 winresource = "0.1.31"

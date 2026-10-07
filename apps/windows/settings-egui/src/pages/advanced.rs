@@ -1,14 +1,21 @@
-//! 「高级」页：文件与目录、日志与诊断开关。
+//! 「高级」页：诊断与修复、文件与目录、日志与诊断开关。
+
+use std::time::Duration;
 
 use eframe::egui;
 use qingjian_platform::LogLevel;
 
 use crate::app::Settings;
 use crate::files;
-use crate::widgets::{list, note, page, toggle};
+use crate::widgets::{caption, list, note, page, toggle};
+
+/// 停在这一页时多久重查一次服务在不在（开一下互斥体，很便宜）。
+const SERVER_POLL: Duration = Duration::from_secs(1);
 
 pub(crate) fn view(settings: &mut Settings, ui: &mut egui::Ui) {
     page(ui, "高级", |ui| {
+        repair(settings, ui);
+        caption(ui, "文件与日志");
         list(ui, |list| {
             list.row(
                 "\u{E8A5}",
@@ -98,4 +105,50 @@ pub(crate) fn view(settings: &mut Settings, ui: &mut egui::Ui) {
         });
         note(ui, "数据只留在本机，不上传。");
     });
+}
+
+/// 「诊断与修复」卡：服务状态 + 重启、深度修复，下面一行小字写诊断出的问题或修复进度。
+fn repair(settings: &mut Settings, ui: &mut egui::Ui) {
+    let progress = settings.repair.progress();
+    let running = settings.repair.server_running();
+    ui.ctx().request_repaint_after(SERVER_POLL);
+    caption(ui, "诊断与修复");
+    list(ui, |list| {
+        list.row(
+            "\u{E9D9}",
+            "输入法服务",
+            "候选窗口不出来、只能打英文，多半是输入法服务没在运行。「重启」会结束旧的服务并重新启动它。",
+            |ui| {
+                let response = ui.add_enabled(!progress.busy, egui::Button::new("重启"));
+                if response.clicked() {
+                    settings.repair.restart();
+                }
+                ui.label(if running { "运行中" } else { "未运行" });
+                response
+            },
+        );
+        list.row(
+            "\u{E90F}",
+            "深度修复",
+            "结束残留进程、清理旧版本留下的文件与自启任务、重新注册输入法，然后重启服务。需要管理员授权。",
+            |ui| {
+                let response = ui.add_enabled(!progress.busy, egui::Button::new("修复"));
+                if response.clicked() {
+                    settings.repair.deep_repair();
+                }
+                response
+            },
+        );
+    });
+    let status = progress
+        .message
+        .clone()
+        .or_else(|| progress.diagnosis.blocker.clone())
+        .or_else(|| {
+            (!running).then(|| "输入法服务没在运行，现在只能打英文。点「重启」试试。".to_owned())
+        });
+    if let Some(status) = status {
+        note(ui, &status);
+        ui.add_space(10.0);
+    }
 }
