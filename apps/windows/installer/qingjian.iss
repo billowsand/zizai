@@ -100,16 +100,17 @@ Source: "{#Repo}\data\generated\english.tsv";    DestDir: "{app}\data\generated"
 Source: "{#Repo}\data\generated\dicts\*.qj";     DestDir: "{app}\data\generated\dicts";  Flags: ignoreversion
 ; —— 本地整句模型（tools/release/pack-model.sh 打成的单文件 data\model\model.qjm；没有就不装，Server 不重排）——
 Source: "{#Repo}\data\model\model.qjm"; DestDir: "{app}\data\model"; Flags: ignoreversion skipifsourcedoesntexist
-; —— 本地测试包可显式携带 SenseVoice；正式包不传 VoiceModelDir，避免默认分发第三方模型 ——
+; —— 语音模型：build.ps1 缺省自动发现仓库 data\voice 下的三份并传这三个宏；
+;    公开 / CI 包不带第三方模型时用 -NoVoiceModels，宏就不定义（见 build.ps1）。
 #ifdef VoiceModelDir
 Source: "{#VoiceModelDir}\model.int8.onnx"; DestDir: "{app}\data\voice\sense-voice"; Flags: ignoreversion
 Source: "{#VoiceModelDir}\tokens.txt"; DestDir: "{app}\data\voice\sense-voice"; Flags: ignoreversion
 #endif
-; —— 本地测试包可显式携带标点恢复模型（同时传 -PunctuationModelDir），装进后配到设置页「标点模型」——
+; —— 标点恢复模型（-PunctuationModelDir 或仓库 data\voice\punctuation），装进后配到设置页「标点模型」——
 #ifdef PunctModelDir
 Source: "{#PunctModelDir}\model.int8.onnx"; DestDir: "{app}\data\voice\punctuation"; Flags: ignoreversion
 #endif
-; —— 本地测试包可显式携带同音词替换资源（-HrDir），配置里 hr_lexicon / hr_rule_fsts 填相对安装根的路径 ——
+; —— 同音词替换资源（-HrDir 或仓库 data\voice\hr），配置里 hr_lexicon / hr_rule_fsts 填相对安装根的路径 ——
 #ifdef HrModelDir
 Source: "{#HrModelDir}\lexicon.txt"; DestDir: "{app}\data\voice\hr"; Flags: ignoreversion
 Source: "{#HrModelDir}\replace.fst"; DestDir: "{app}\data\voice\hr"; Flags: ignoreversion

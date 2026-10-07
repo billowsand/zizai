@@ -252,12 +252,15 @@ jobs:
         # -NoPackage：只构建。签回后再 -PackageOnly -PreSigned 打包，已签文件被 Inno 原样拷进安装包。
         # SHERPA_ONNX_LIB_DIR 由上游 Pre-fetch step 注入；build.rs 看这个变量就会跳过 GitHub 下载。
         # bundled 变体：传 -VoiceModelDir / -PunctuationModelDir / -HrDir / -BuildLabel bundled，让 build.ps1 把模型打进包。
+        # 标准包传 -NoVoiceModels（build.ps1 缺省是带模型的）。
         run: |
           $args = @('-NoPackage')
-          if ($env:BUNDLED_VOICE_DIR) { $args += @('-VoiceModelDir', $env:BUNDLED_VOICE_DIR) }
-          if ($env:BUNDLED_PUNCT_DIR) { $args += @('-PunctuationModelDir', $env:BUNDLED_PUNCT_DIR) }
-          if ($env:BUNDLED_HR_DIR)    { $args += @('-HrDir', $env:BUNDLED_HR_DIR) }
-          if ($env:BUNDLED -eq '1')   { $args += '-BuildLabel', 'bundled' }
+          if ($env:BUNDLED -eq '1') {
+            $args += @('-VoiceModelDir', $env:BUNDLED_VOICE_DIR, '-PunctuationModelDir', $env:BUNDLED_PUNCT_DIR, '-HrDir', $env:BUNDLED_HR_DIR)
+            $args += '-BuildLabel', 'bundled'
+          } else {
+            $args += '-NoVoiceModels'
+          }
           powershell -NoProfile -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1 @args
 
       # —— SignPath 签名第一段：TSF DLL 64/32 位、Server、语音 Worker、设置程序 ——
@@ -335,12 +338,16 @@ jobs:
         shell: pwsh
         run: |
           # 签回产物打包带 -PreSigned（build.ps1 逐个校验签名有效才往下走）；无签名链时退回旧的剥签名行为。
+          # 语音模型：bundled 变体带三份；标准公开包显式 -NoVoiceModels（build.ps1 缺省是带模型的）。
           $isccArgs = @('-PackageOnly')
           if ('${{ steps.secrets.outputs.signpath }}' -eq 'true') { $isccArgs += '-PreSigned' }
-          if ($env:BUNDLED_VOICE_DIR) { $isccArgs += @('-VoiceModelDir', $env:BUNDLED_VOICE_DIR) }
-          if ($env:BUNDLED_PUNCT_DIR) { $isccArgs += @('-PunctuationModelDir', $env:BUNDLED_PUNCT_DIR) }
-          if ($env:BUNDLED_HR_DIR)    { $isccArgs += @('-HrDir', $env:BUNDLED_HR_DIR) }
-          if ($env:BUNDLED -eq '1')   { $isccArgs += '-BuildLabel', 'bundled' }
+          if ($env:BUNDLED -eq '1') {
+            $isccArgs += @('-VoiceModelDir', $env:BUNDLED_VOICE_DIR, '-PunctuationModelDir', $env:BUNDLED_PUNCT_DIR, '-HrDir', $env:BUNDLED_HR_DIR)
+            $isccArgs += '-BuildLabel', 'bundled'
+          } else {
+            # 标准公开包不带第三方语音模型（build.ps1 缺省是带的，这里显式关掉）。
+            $isccArgs += '-NoVoiceModels'
+          }
           powershell -NoProfile -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1 @isccArgs
 
       # —— SignPath 签名第二段：安装包外层 ——

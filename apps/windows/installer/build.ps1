@@ -22,23 +22,28 @@
     产物已被 SignPath 在 CI 里签回（docs/design/code-signing.md）：不剥签名、打包前逐个校验签名有效，
     别让坏签名静默进安装包。与 -Sign（本地自签）互斥。
 .PARAMETER Sign
-    自签产物（sign-local.ps1）并开 uiAccess（候选窗才能盖过商店 / 任务栏搜索）。uiAccess=true 的 exe 要本机受信任的签名
-    才准启动，自签证书只有编译机信任——所以 -Sign 只用于本机真机测，对外分发的包不加此开关：不签名、关 uiAccess，
-    候选窗在那几个系统界面里会被盖住，但任何机器都能起。
+    自签产物（sign-local.ps1）并开 uiAccess（候选窗才能盖过商店 / 任务栏搜索）。另把证书公钥导出到 target\installer\Qingjian-Dev-CodeSign.cer，
+    供内测目标机手动导入 LocalMachine\Root 与 LocalMachine\TrustedPublisher。.cer 不含私钥。该证书不具备公开 CA 信任
+    或 SmartScreen 信誉，-Sign 仅用于开发 / 内测，不用于对外分发。
     不加时还会剥掉上一次 -Sign 残留在 target\ 里的签名，两种包在同一台机器上交替打不会串。
 .PARAMETER WinUiSettings
     设置程序换回 WinUI 3 那一份（qingjian-settings.exe + 118 项 / 56 MB 自包含 Windows App Runtime）。
     **缺省是 egui 那份**（qingjian-settings-egui.exe，按正式名字装，不带运行时）；这个开关只在要对比时用，
     成品另起名 Zizai-<版本>-winui-Setup.exe，不覆盖正式包。
+.PARAMETER NoVoiceModels
+    唯一的不打包语音模型的方式：跳过仓库 data\voice 的自动发现，安装包里没有 SenseVoice / 标点 / 同音词
+    三份模型。**缺省是打包**——编译机上 data\voice 下有哪份就带哪份。
+    公开 / CI 包不带第三方模型时显式加这个开关（见 docs\notes\release.md）。
 .PARAMETER VoiceModelDir
-    可选的 SenseVoice 模型目录，必须含 model.int8.onnx 与 tokens.txt。仅用于本地测试包；
-    正式发布仍不默认携带模型，避免把模型许可与源码许可混为一谈。
+    可选的 SenseVoice 模型目录，必须含 model.int8.onnx 与 tokens.txt。不传时用仓库 data\voice\sense-voice
+    （存在就带）；要与 -NoVoiceModels 互斥。
 .PARAMETER PunctuationModelDir
     可选的本地标点恢复模型目录，必须含 model.int8.onnx（sherpa-onnx 的
     punct-ct-transformer-zh-en …-int8，见 https://github.com/k2-fsa/sherpa-onnx/releases/tag/punctuation-models）。
-    与 -VoiceModelDir 一样仅用于本地测试包；两者常一起用：带标点模型不带 SenseVoice 识别无法工作，意义不大。
+    不传时用仓库 data\voice\punctuation（存在就带）。带标点模型不带 SenseVoice 时识别无法工作，意义不大。
 .PARAMETER HrDir
     可选的同音词替换资源目录，必须含 lexicon.txt 与 replace.fst（sherpa-onnx 同音词替换）。
+    不传时用仓库 data\voice\hr（存在就带）。
     装到 {app}\data\voice\hr；hr_lexicon / hr_rule_fsts 在配置里填相对这个安装根的路径。
 .PARAMETER BuildLabel
     可选的阶段测试标识（仅允许字母、数字、点和短横线），追加到版本号与安装包文件名。
@@ -52,6 +57,7 @@ param(
     [switch]$NoPackage,
     [switch]$PackageOnly,
     [switch]$PreSigned,
+    [switch]$NoVoiceModels,
     [string]$VoiceModelDir,
     [string]$PunctuationModelDir,
     [string]$HrDir,
@@ -90,7 +96,7 @@ $Iss  = Join-Path $PSScriptRoot 'qingjian.iss'
 # uiAccess 跟着 -Sign 走（server\build.rs 读这个变量，改了会自动重编 Server）；理由见 -Sign 的说明。
 $env:QINGJIAN_UIACCESS = if ($Sign) { '1' } else { '0' }
 if ($Sign) {
-    Write-Host 'uiAccess=1（-Sign：仅本机真机测，别用于对外分发）' -ForegroundColor Yellow
+    Write-Host 'uiAccess=1（-Sign：开发 / 内测用；目标机需手动导入导出的 .cer，别用于对外分发）' -ForegroundColor Yellow
 } else {
     Write-Host 'uiAccess=0（对外分发：Server 任何机器都能起；候选窗在商店 / 任务栏搜索里可能被盖）' -ForegroundColor Cyan
 }
@@ -167,11 +173,38 @@ if ($missing.Count -gt 0) { throw "自包含 Windows App Runtime 缺 $($missing.
 Write-Host "自包含运行时 $($wanted.Count) 项 → target\installer\settings-runtime" -ForegroundColor Cyan
 }
 
+# 语音模型缺省随包：编译机 data\voice 下有哪份就带哪份（不传参数时自动发现目录）。
+# -NoVoiceModels 是唯一的例外，公开 / CI 包不带第三方模型时显式加上。
+if ($NoVoiceModels) {
+    if ($VoiceModelDir -or $PunctuationModelDir -or $HrDir) {
+        throw '-NoVoiceModels 与 -VoiceModelDir / -PunctuationModelDir / -HrDir 互斥（一个是不带模型，一个是指定带哪个）'
+    }
+    Write-Host '不带语音模型（-NoVoiceModels）：仓库 data\voice 下的 SenseVoice / 标点 / 同音词都不进安装包' -ForegroundColor Cyan
+} else {
+    if (-not $VoiceModelDir) {
+        $localVoiceModelDir = Join-Path $Repo 'data\voice\sense-voice'
+        if (Test-Path -LiteralPath $localVoiceModelDir -PathType Container) { $VoiceModelDir = $localVoiceModelDir }
+    }
+    if (-not $PunctuationModelDir) {
+        $localPunctuationModelDir = Join-Path $Repo 'data\voice\punctuation'
+        if (Test-Path -LiteralPath $localPunctuationModelDir -PathType Container) { $PunctuationModelDir = $localPunctuationModelDir }
+    }
+    if (-not $HrDir) {
+        $localHrDir = Join-Path $Repo 'data\voice\hr'
+        if (Test-Path -LiteralPath $localHrDir -PathType Container) { $HrDir = $localHrDir }
+    }
+}
+
 # 1.5) 签名（必须在 iscc 打包前：Inno 把已签的文件原样拷进安装包）。
 $binaries = $targets | ForEach-Object { Join-Path $Repo "target\$_" }
+$publicCertificate = Join-Path $Repo 'target\installer\Qingjian-Dev-CodeSign.cer'
+if (-not $Sign -and (Test-Path -LiteralPath $publicCertificate)) {
+    Remove-Item -LiteralPath $publicCertificate -Force
+    Write-Host '移除上次 -Sign 导出的自签证书，避免与当前安装包混淆' -ForegroundColor Yellow
+}
 if ($Sign) {
     Write-Host '自签产物（uiAccess 要求 Server 代码签名）…' -ForegroundColor Cyan
-    & (Join-Path $PSScriptRoot 'sign-local.ps1') -Path $binaries
+    & (Join-Path $PSScriptRoot 'sign-local.ps1') -Path $binaries -PublicCertificatePath $publicCertificate
 } elseif ($PreSigned) {
     # CI：产物刚从 SignPath 签回。不剥签名，但逐个校验有效，别静默把签坏的文件打进包。
     foreach ($f in $binaries) {
@@ -237,7 +270,7 @@ if ($VoiceModelDir) {
     if ($missingVoice.Count -gt 0) {
         throw "语音模型目录缺文件：$($missingVoice -join '、')（$VoiceModelDir）"
     }
-    Write-Host "本地测试包携带 SenseVoice 模型：$VoiceModelDir" -ForegroundColor Yellow
+    Write-Host "安装包携带 SenseVoice 模型：$VoiceModelDir" -ForegroundColor Yellow
 }
 
 if ($PunctuationModelDir) {
@@ -245,7 +278,7 @@ if ($PunctuationModelDir) {
     if (-not (Test-Path -LiteralPath (Join-Path $PunctuationModelDir 'model.int8.onnx'))) {
         throw "标点模型目录缺 model.int8.onnx（$PunctuationModelDir）"
     }
-    Write-Host "本地测试包携带标点恢复模型：$PunctuationModelDir" -ForegroundColor Yellow
+    Write-Host "安装包携带标点恢复模型：$PunctuationModelDir" -ForegroundColor Yellow
 }
 
 if ($HrDir) {
@@ -256,7 +289,15 @@ if ($HrDir) {
     if ($missingHr.Count -gt 0) {
         throw "同音词替换目录缺文件：$($missingHr -join '、')（$HrDir）"
     }
-    Write-Host "本地测试包携带同音词替换资源：$HrDir" -ForegroundColor Yellow
+    Write-Host "安装包携带同音词替换资源：$HrDir" -ForegroundColor Yellow
+}
+
+if (-not $VoiceModelDir) {
+    if ($NoVoiceModels) {
+        Write-Warning '当前安装包没有 SenseVoice 模型（-NoVoiceModels），目标机无法进行语音识别。'
+    } else {
+        Write-Warning '仓库 data\voice 下没有 sense-voice 目录，当前安装包无法进行语音识别；需要模型时把 model.int8.onnx 与 tokens.txt 放到 data\voice\sense-voice，或用 -VoiceModelDir 指定。'
+    }
 }
 
 # 3) 找 ISCC.exe：先 Program Files 与每用户安装的 7（与开发机同版本；CI 镜像 PATH 上自带 Chocolatey 的 6，不带简中翻译，不能让它抢先），

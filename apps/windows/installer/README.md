@@ -14,7 +14,7 @@ C:\Program Files\Qingjian\
     Microsoft.UI.Xaml.dll …   仅 `-WinUiSettings` 对比包包含的 Windows App Runtime
     qingjian.ico              开始菜单 / 启动项快捷方式的图标（exe 里也嵌了一份）
     data\generated\           dict.qj / lm.qj / english.tsv / dicts\*.qj
-    data\voice\               仅 -VoiceModelDir / -PunctuationModelDir / -HrDir 本地测试包包含
+    data\voice\               本地语音模型；缺省自动包含仓库 data\voice 下已有的三份，-NoVoiceModels 可关掉
     assets\                   emoji\ sample\
 ```
 
@@ -66,24 +66,23 @@ AppModel API 把框架包加进进程包图，Windows 10 上没有那两个函�
 powershell -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1
 ```
 
-本地语音联调时可把已经准备好的 SenseVoice 一并放入测试包；目录须含 `model.int8.onnx` 与 `tokens.txt`：
+**语音模型缺省随包**。编译机把模型放在仓库 `data\voice\sense-voice`、`data\voice\punctuation`、`data\voice\hr`，`build.ps1` 会自动发现并一起装入安装包（`data\voice` 在 .gitignore 里，只存在于编译机）；SenseVoice 目录须含 `model.int8.onnx` 与 `tokens.txt`，缺文件直接报错：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1 -VoiceModelDir E:\auto-voice\models\sense-voice
+powershell -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1
 ```
 
-标点恢复与同音词替换资源同理；带这三个开关的资源打进包后**装完即用，无需在设置里填任何路径**——
-Server 按固定相对路径（`data\voice\punctuation\model.int8.onnx`、`data\voice\hr\lexicon.txt`、`replace.fst`）
-自动发现，设置里只选择加载与否（关着不加载；文件不在时自动跳过，不影响语音输入）。标点模型用 sherpa-onnx 的
+其中只有 SenseVoice 是识别必需项；标点模型和同音词替换资源是可选增强。文件打进包后会安装到固定相对路径（SenseVoice 在 `data\voice\sense-voice`，标点模型在 `data\voice\punctuation`，同音词资源在 `data\voice\hr`），**装完无需另配模型路径**。目标机仍需在「设置 → 语音输入」打开「本地语音输入」。标点模型使用 sherpa-onnx 的
 `sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8`（72 MB，从
 [punctuation-models Release](https://github.com/k2-fsa/sherpa-onnx/releases/tag/punctuation-models) 下载）。
-通常与 `-VoiceModelDir` 一起传：
+
+不带模型是例外，要显式说：公开 / CI 标准包用 `-NoVoiceModels`（与 `-VoiceModelDir` 等互斥），发版流程里的 bundled 变体则显式传三个目录：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1 -VoiceModelDir E:\auto-voice\models\sense-voice -PunctuationModelDir data\voice\punctuation -HrDir E:\auto-voice\models\hr
+powershell -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1 -NoVoiceModels
 ```
 
-此参数只用于本地测试，正式发布包不默认分发第三方模型。
+模型也可以不从仓库 `data\voice` 取，用 `-VoiceModelDir` / `-PunctuationModelDir` / `-HrDir` 指向别处。
 
 阶段测试包用 `-BuildLabel phase1-r1` 追加唯一标识；同一阶段重编时递增 `r2`、`r3`，避免不同二进制共用文件名：
 
@@ -93,7 +92,30 @@ powershell -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1 -Build
 
 脚本 release 构建 Windows 产物、从 `apps\windows\server\Cargo.toml` 读版本、找 `ISCC.exe`、编 `qingjian.iss`，
 成品在 `target\installer\Zizai-<版本>-Setup.exe`。改了数据 / 脚本但二进制没变时加 `-SkipBuild`；`-Sign` 用自签证书签产物
-（uiAccess 要求 Server 签名 + 装 Program Files）。
+（uiAccess 要求 Server 签名 + 装 Program Files），并在同目录导出公钥 `Qingjian-Dev-CodeSign.cer`，方便将内测包复制到另一台机器。
+
+### 自签内测包安装到另一台机器
+
+在编译机运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1 -Sign
+```
+
+完成后把 `target\installer\Zizai-<版本>-Setup.exe` 和同目录的 `Qingjian-Dev-CodeSign.cer` 一起复制到目标机。
+先在目标机以管理员身份打开 PowerShell，导入证书，再运行安装包：
+
+```powershell
+$cert = (Resolve-Path .\Qingjian-Dev-CodeSign.cer).Path
+Import-Certificate -FilePath $cert -CertStoreLocation Cert:\LocalMachine\Root
+Import-Certificate -FilePath $cert -CertStoreLocation Cert:\LocalMachine\TrustedPublisher
+```
+
+目标机没导入证书时，带 uiAccess 的 Server 会被系统拒绝启动（ShellExecute 报 740 / 8235），表现为只能打英文、候选窗不出来；
+设置程序「高级 → 诊断与修复」会直接指出这一点，TSF 日志里也会记下系统错误码。
+
+`.cer` 只含公钥，不含签名私钥；私钥留在编译机。把证书加入本地计算机的受信任根是内测用的信任设置，**只在自己管理、愿意信任该证书的测试机上操作**。
+安装后需将程序装进 `Program Files` 才能使用 uiAccess。安装包本身仍未签名，因此 SmartScreen / 安装程序的“未知发布者”提示仍可能出现；此流程只让已签名的程序文件在目标机受信任，不会赋予公开证书信誉。
 
 **设置程序缺省用 egui 那份**（`qingjian-settings-egui.exe`，按正式名字装进去，Server 的齿轮、开始菜单、安装前 taskkill 都不用改），
 不装那 118 项 Windows App Runtime，同一提交实测 76.9 → 66.2 MiB。从带 WinUI 的老版本升上来时，
@@ -116,7 +138,7 @@ powershell -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1 -Build
 
 - **Inno 版本**：开发机与 CI 统一用 Inno Setup **7.1.0**（CI 从 jrsoftware/issrc 的 GitHub Release 钉死下载）。它自带简体中文翻译；
   6.x 的安装包不带 `Languages\ChineseSimplified.isl`，Chocolatey 也只有 6.x，别用。`ArchitecturesAllowed=x64compatible` 需 6.3+。
-- **签名**：对外分发走 `release.yml` 的 SignPath Foundation 免费签名（流程与配置见 `docs\design\code-signing.md`，不在本机签）；`-PreSigned` 是给 CI 的：产物已被 SignPath 签回时跳过剥离并逐个校验签名。开发期用 `-Sign` 的自签证书。
+- **签名**：对外分发走 `release.yml` 的 SignPath Foundation 免费签名（流程与配置见 `docs\design\code-signing.md`，不在本机签）；`-PreSigned` 是给 CI 的：产物已被 SignPath 签回时跳过剥离并逐个校验签名。开发 / 内测可用 `-Sign` 自签，脚本会导出公钥 `.cer` 给目标测试机导入；不要用于公开分发。
 - **不签名是缺省**：`build.ps1` 不加 `-Sign` / `-PreSigned` 就不签名、不嵌 uiAccess（`server\build.rs` 只认 `QINGJIAN_UIACCESS=1`），
   打出来的包任何机器都能起——没签名的 exe 带 uiAccess=true 会起不来（os error 740）。代价是候选窗在 UWP 宿主里可能被盖住、TSF DLL 进不了系统应用。
   `release.yml` 在 SignPath 配置缺省时仍走这条路，配齐后自动签名并开 uiAccess。

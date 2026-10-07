@@ -80,6 +80,7 @@ cargo 命令全 `--locked`（含 `build.ps1`）。普通 CI 只有 `contents: re
 3. CI 跑 `release.yml`，多一个 `Pre-fetch bundled models` 步骤从 sherpa-onnx release 下载三份模型到 `target/bundled-models/`
    （SHA-256 由维护者手填到 workflow 注释里；下游 tag 不重发，CI 自动重打时 hash 不变则放行）。
 4. build.ps1 `-VoiceModelDir / -PunctuationModelDir / -HrDir -BuildLabel bundled` 编出 `Zizai-<版本>-bundled-Setup.exe`。
+   （标准包那一支相反，显式传 `-NoVoiceModels`——build.ps1 本地缺省是带模型的，见 apps\windows\installer\README.md。）
 5. `gh release upload` 追加到 BASE_TAG（即 `windows-v<版本>` 标准版）的 asset 列表；
    不动 `SHA256SUMS` / `build-info.json`（仍是标准版那次构建时写的内容）。
 6. 重新生成 `releases.json`（按 BASE_TAG），新 asset 自动出现在官网下载页「其他平台/历史资产」那一档里。
@@ -138,7 +139,7 @@ cargo 命令全 `--locked`（含 `build.ps1`）。普通 CI 只有 `contents: re
 ## 本机打包
 
 `powershell -File apps/windows/installer/build.ps1`：release 构建 Server、语音 Worker、设置程序、TSF DLL + 32 位 DLL，再用 Inno Setup 编安装包，
-成品在 `target\installer\Zizai-<版本>-Setup.exe`。数据或脚本改了、二进制没变时加 `-SkipBuild`；`-Sign` 用自签证书签产物（本机真机测用）。
+成品在 `target\installer\Zizai-<版本>-Setup.exe`。数据或脚本改了、二进制没变时加 `-SkipBuild`；`-Sign` 用自签证书签产物，并导出 `Qingjian-Dev-CodeSign.cer` 供内测目标机手动导入（不用于公开分发，细节见 `apps/windows/installer/README.md`）。
 **对外分发的包不要本地打**：走 `release.yml`（SignPath 签名，见 docs/design/code-signing.md）。CI 分段用的
 `-NoPackage`（只构建）与 `-PackageOnly -PreSigned`（产物已被 SignPath 签回，打包前校验签名）一般只在 workflow 里用。
 
