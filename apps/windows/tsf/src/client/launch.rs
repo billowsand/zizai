@@ -93,12 +93,31 @@ fn spawn() -> Result<String, String> {
             SW_SHOWNORMAL,
         )
     };
-    // ShellExecuteW 的返回值是个假句柄：大于 32 才算成功，否则它就是错误码。
+    // ShellExecuteW 的返回值是个假句柄：大于 32 才算成功，否则它就是错误码；细的原因在 GetLastError。
     let code = result.0 as usize;
     if code <= 32 {
-        return Err(format!("ShellExecute 返回 {code}"));
+        let error = unsafe { GetLastError() };
+        return Err(format!(
+            "ShellExecute 返回 {code}，系统错误 {}{}",
+            error.0,
+            launch_hint(error.0)
+        ));
     }
     Ok(file.to_string())
+}
+
+/// 常见拉不起的系统错误码给一句人话，方便看日志的人直接对症。
+fn launch_hint(error: u32) -> &'static str {
+    match error {
+        // ERROR_ELEVATION_REQUIRED / ERROR_DS_REFERRAL：带 uiAccess 的 exe 没有本机受信任的签名，
+        // 或者没装在 Program Files 这类安全位置（自签内测包装到没导入证书的机器上就是这样）。
+        740 | 8235 => {
+            "（Server 带 uiAccess，但签名在本机不受信任或不在 Program Files：导入内测证书，或改装不签名的安装包）"
+        }
+        2 | 3 => "（Server exe 不在）",
+        5 => "（拒绝访问）",
+        _ => "",
+    }
 }
 
 /// 与本 DLL 同目录的 Server exe；不在（开发时单跑 DLL）就别拉。
