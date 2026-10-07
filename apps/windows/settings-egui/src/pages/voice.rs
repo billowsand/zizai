@@ -18,20 +18,25 @@ const VOICE_KEYS: [(&str, &str); 5] = [
 pub(crate) fn view(settings: &mut Settings, ui: &mut egui::Ui) {
     page(ui, "语音输入", |ui| {
         let mut voice = settings.config.voice.enabled;
+        let model_installed = model_installed(settings);
         caption(ui, "识别");
         list(ui, |list| {
-            list.row(
-                "\u{E720}",
-                "本地语音输入",
-                "按一下快捷键开始说话，再按一下后离线识别并直接写入当前输入框。",
-                |ui| {
+            let tip = if model_installed {
+                "按一下快捷键开始说话，再按一下后离线识别并直接写入当前输入框。"
+            } else {
+                "没有找到语音识别模型（安装目录下的 data\\voice\\sense-voice），打不开语音输入。请安装带语音模型的版本。"
+            };
+            list.row("\u{E720}", "本地语音输入", tip, |ui| {
+                // 模型不在时不让打开；已经开着的（旧配置）仍可以关掉。
+                ui.add_enabled_ui(model_installed || voice, |ui| {
                     let response = toggle(ui, &mut voice, "本地语音输入");
                     if response.changed() {
                         settings.save("voice", "enabled", voice);
                     }
                     response
-                },
-            );
+                })
+                .inner
+            });
 
             let current_voice_key = settings.config.shortcut.voice;
             list.row(
@@ -205,11 +210,28 @@ pub(crate) fn view(settings: &mut Settings, ui: &mut egui::Ui) {
             );
         });
 
+        if !model_installed {
+            note(
+                ui,
+                "没有找到语音识别模型，本地语音输入不可用。请安装带语音模型的版本（安装目录下应有 data\\voice\\sense-voice）。",
+            );
+        }
         note(
             ui,
             "标点模型与同音词替换用随包资源，安装/卸载一起走，设置里只选择开还是关。转写整理是可选增强；服务未启动、超时或改动超出红线时，会直接使用识别原文。",
         );
     });
+}
+
+/// SenseVoice 模型与 token 表都在盘上（相对路径按安装目录展开，与 Server 起语音 Worker 时同一套）。
+fn model_installed(settings: &Settings) -> bool {
+    qingjian_platform::resources::bundled_root().is_some_and(|root| {
+        settings
+            .config
+            .voice
+            .missing_recognizer_files(&root)
+            .is_empty()
+    })
 }
 
 /// 大模型整理档位选项：（界面文案，配置值）；`show_combo` 的选项都是这个顺序。

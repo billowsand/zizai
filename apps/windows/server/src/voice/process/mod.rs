@@ -36,6 +36,10 @@ impl ProcessVoiceBackend {
         config: &VoiceConfig,
         hotwords: Vec<String>,
     ) -> Result<Self, VoiceBackendError> {
+        if let Some(missing) = config.missing_recognizer_files(root).into_iter().next() {
+            return Err(VoiceBackendError::ModelMissing(missing));
+        }
+        let [model, tokens] = config.recognizer_files(root);
         let hotwords = (!hotwords.is_empty()).then(|| hotwords.join("\n"));
         let resolve = |value: &str| {
             let path = PathBuf::from(value);
@@ -79,8 +83,8 @@ impl ProcessVoiceBackend {
         Self::spawn(
             executable,
             WorkerConfig {
-                model: resolve(&config.model).display().to_string(),
-                tokens: resolve(&config.tokens).display().to_string(),
+                model: model.display().to_string(),
+                tokens: tokens.display().to_string(),
                 language: config.language.clone(),
                 input_device: (!config.input_device.trim().is_empty())
                     .then(|| config.input_device.clone()),

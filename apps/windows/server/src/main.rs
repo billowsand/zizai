@@ -271,7 +271,7 @@ fn configure_voice(router: &mut Router, config: &Config, root: &Path) {
         }
         Err(error) => {
             tracing::error!(%error, worker = %worker.display(), "语音 Worker 启动失败");
-            router.configure_voice_failure(trigger, "语音工作进程启动失败".into());
+            router.configure_voice_failure(trigger, error.notice().into());
         }
     }
 }

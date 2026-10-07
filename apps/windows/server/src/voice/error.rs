@@ -14,4 +14,18 @@ pub enum VoiceBackendError {
 
     #[error("voice worker rejected request: {0}")]
     Rejected(String),
+
+    /// 识别模型不在盘上（安装包没带语音模型）：不起 Worker。
+    #[error("voice model missing: {}", .0.display())]
+    ModelMissing(std::path::PathBuf),
+}
+
+impl VoiceBackendError {
+    /// 按语音键时给用户看的一句话。
+    pub fn notice(&self) -> &'static str {
+        match self {
+            Self::ModelMissing(_) => "未安装语音模型",
+            _ => "语音工作进程启动失败",
+        }
+    }
 }

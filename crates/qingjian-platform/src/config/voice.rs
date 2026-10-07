@@ -1,5 +1,7 @@
 //! Windows 语音输入配置；路径由壳相对安装根目录解析。
 
+use std::path::{Path, PathBuf};
+
 use serde::{Deserialize, Serialize};
 
 /// 大模型整理档位：体现允许的改动强度。
@@ -68,6 +70,26 @@ pub struct VoiceConfig {
 }
 
 impl VoiceConfig {
+    /// 识别必需的两个文件（SenseVoice 模型、token 表）的实际路径：相对路径按随包根 `root` 展开。
+    pub fn recognizer_files(&self, root: &Path) -> [PathBuf; 2] {
+        [&self.model, &self.tokens].map(|value| {
+            let path = PathBuf::from(value);
+            if path.is_absolute() {
+                path
+            } else {
+                root.join(path)
+            }
+        })
+    }
+
+    /// 识别必需文件里不在盘上的那些；空表示模型齐全，可以打开语音输入。
+    pub fn missing_recognizer_files(&self, root: &Path) -> Vec<PathBuf> {
+        self.recognizer_files(root)
+            .into_iter()
+            .filter(|path| !path.is_file())
+            .collect()
+    }
+
     /// 生效的整理档位：显式 `polish` 键优先，老配置回退 `polish_enabled`。
     pub fn polish_level(&self) -> PolishLevel {
         match self.polish {
@@ -97,5 +119,27 @@ impl Default for VoiceConfig {
             hr_lexicon: String::new(),
             hr_rule_fsts: String::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognizer_files_resolve_against_root() {
+        let root = Path::new("install");
+        let [model, tokens] = VoiceConfig::default().recognizer_files(root);
+        assert_eq!(model, root.join("data/voice/sense-voice/model.int8.onnx"));
+        assert_eq!(tokens, root.join("data/voice/sense-voice/tokens.txt"));
+    }
+
+    #[test]
+    fn missing_recognizer_files_lists_both_when_root_is_empty() {
+        let root = std::env::temp_dir().join("qingjian-voice-missing-model-test");
+        assert_eq!(
+            VoiceConfig::default().missing_recognizer_files(&root).len(),
+            2
+        );
     }
 }

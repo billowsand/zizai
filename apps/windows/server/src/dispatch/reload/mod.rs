@@ -192,7 +192,7 @@ impl Router {
             Err(error) => {
                 tracing::error!(%error, "热加载语音 Worker 失败");
                 self.voice
-                    .configure_failure(config.shortcut.voice, "语音工作进程启动失败".into());
+                    .configure_failure(config.shortcut.voice, error.notice().into());
             }
         }
     }
